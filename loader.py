@@ -1379,21 +1379,29 @@ class DBDModLoader(_BaseClass):
     # ── Auto-update ──────────────────────────────────────────────────────────
 
     def _check_for_update(self):
-        """Background thread: fetch version.txt from GitHub and compare."""
-        import http.client, ssl
         try:
-            ctx  = ssl.create_default_context()
-            conn = http.client.HTTPSConnection("raw.githubusercontent.com", timeout=8, context=ctx)
-            conn.request("GET", "/NixxGame/DBDPakLoader/main/version.txt",
-                         headers={"User-Agent": "DBDPakLoader/1.0"})
-            resp   = conn.getresponse()
-            latest = resp.read().decode().strip()
-            conn.close()
-            if latest and latest != VERSION:
+            req = urllib.request.Request(
+                _GITHUB_VER_URL,
+                headers={"User-Agent": "DBDPakLoader/1.0"}
+            )
+
+            with urllib.request.urlopen(req, timeout=8) as r:
+                if r.status != 200:
+                    return
+                latest = r.read().decode("utf-8", errors="ignore").strip()
+
+            latest = latest.lstrip("vV").strip()
+            local  = VERSION.lstrip("vV").strip()
+
+            if not latest:
+                return
+
+            if latest != local:
                 self._latest_version = latest
                 self.after(0, self._show_update_badge)
+
         except Exception:
-            pass  # silent — no network / repo not found etc.
+            pass
 
     def _show_update_badge(self):
         latest = getattr(self, "_latest_version", "?")
@@ -1417,14 +1425,12 @@ class DBDModLoader(_BaseClass):
             try:
                 ctx  = ssl.create_default_context()
                 for filename in _UPDATE_FILES:
-                    url_path = f"/NixxGame/DBDPakLoader/main/{filename}"
-                    conn = http.client.HTTPSConnection(
-                        "raw.githubusercontent.com", timeout=30, context=ctx)
-                    conn.request("GET", url_path,
-                                 headers={"User-Agent": "DBDPakLoader/1.0"})
-                    resp = conn.getresponse()
-                    if resp.status == 200:
-                        data = resp.read()
+                    url = f"{_GITHUB_RAW}/{filename}"
+                    req = urllib.request.Request(url, headers={"User-Agent": "DBDPakLoader/1.0"})
+                    with urllib.request.urlopen(req, timeout=30) as r:
+                        if r.status != 200:
+                            raise RuntimeError(f"Failed downloading {filename} (HTTP {r.status})")
+                        data = r.read()
                         dest = _SCRIPT_DIR / filename
                         # Write to .new first, then atomic replace
                         tmp  = dest.with_suffix(dest.suffix + ".new")
