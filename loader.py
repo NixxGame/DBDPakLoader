@@ -38,8 +38,6 @@ except ImportError:
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 
-# ── Version ──────────────────────────────────────────────────────────────────
-_SCRIPT_DIR = Path(__file__).resolve().parent
 
 def _read_local_version():
     try:
@@ -47,12 +45,14 @@ def _read_local_version():
     except Exception:
         return "0.0.0"
 
-VERSION         = _read_local_version()
 
-_GITHUB_RAW     = "https://raw.githubusercontent.com/NixxGame/DBDPakLoader/main"
+VERSION = _read_local_version().lstrip("vV").strip()
+
+_GITHUB_RAW = "https://raw.githubusercontent.com/NixxGame/DBDPakLoader/main"
 _GITHUB_VER_URL = _GITHUB_RAW + "/version.txt"
 
-_UPDATE_FILES   = ["loader.py", "requirements.txt", "version.txt"]
+_UPDATE_FILES = ["loader.py", "requirements.txt", "version.txt"]
+
 
 def _format_bytes(num: int) -> str:
     if num < 1024:
@@ -82,11 +82,13 @@ def _extract_archive(archive_path: str, dest_dir: str, suffix: str):
     if suffix == ".zip":
         with zipfile.ZipFile(archive_path, "r") as zf:
             zf.extractall(dest_dir)
+
     elif suffix == ".7z":
         if not _HAS_7Z:
             raise RuntimeError("7-Zip support requires py7zr.\n\nRun:  pip install py7zr")
         with py7zr.SevenZipFile(archive_path, mode="r") as sz:
             sz.extractall(path=dest_dir)
+
     elif suffix in (".rar", ".cbr"):
         unrar_tool = _find_unrar_tool()
         if _HAS_RAR and unrar_tool:
@@ -97,6 +99,7 @@ def _extract_archive(archive_path: str, dest_dir: str, suffix: str):
                 return
             except Exception:
                 pass
+
         if unrar_tool:
             r = subprocess.run(
                 [unrar_tool, "x", "-y", "-o+", archive_path, dest_dir + os.sep],
@@ -104,7 +107,9 @@ def _extract_archive(archive_path: str, dest_dir: str, suffix: str):
             )
             if r.returncode == 0:
                 return
+
         raise RuntimeError("Could not extract RAR file.\n\nPlace UnRAR.exe in the same folder as loader.py")
+
     else:
         raise RuntimeError(f"Unsupported archive format: {suffix}")
 
@@ -148,11 +153,13 @@ def _auto_detect_dbd_paks_path() -> tuple[str | None, str]:
         Path(r"C:\XboxGames\Dead by Daylight"),
         Path(r"D:\XboxGames\Dead by Daylight"),
     ]
+
     for root in common_roots:
         if root.exists():
             paks = _find_paks_from_game_root(root)
             if paks:
                 return (str(paks), f"Auto-detected from common paths: {root}")
+
     if _HAS_WINREG:
         steam_path = _registry_get_value(r"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath")
         if steam_path:
@@ -161,25 +168,26 @@ def _auto_detect_dbd_paks_path() -> tuple[str | None, str]:
                 paks = _find_paks_from_game_root(guess)
                 if paks:
                     return (str(paks), "Auto-detected from Steam registry")
+
     return (None, "Could not auto-detect Dead by Daylight install folder")
 
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-BG_ROOT     = "#0d0d10"
-BG_PANEL    = "#13131a"
-BG_CARD     = "#1c1c25"
+BG_ROOT = "#0d0d10"
+BG_PANEL = "#13131a"
+BG_CARD = "#1c1c25"
 BG_CARD_HOV = "#22222e"
-BG_FIELD    = "#0f0f16"
-ACCENT      = "#c084fc"
-ACCENT_DIM  = "#7c3aed"
-GREEN       = "#4ade80"
-RED         = "#f87171"
-ORANGE      = "#fb923c"
-TEXT_PRI    = "#f0f0ff"
-TEXT_SEC    = "#7070a0"
-TEXT_MUT    = "#3a3a5c"
+BG_FIELD = "#0f0f16"
+ACCENT = "#c084fc"
+ACCENT_DIM = "#7c3aed"
+GREEN = "#4ade80"
+RED = "#f87171"
+ORANGE = "#fb923c"
+TEXT_PRI = "#f0f0ff"
+TEXT_SEC = "#7070a0"
+TEXT_MUT = "#3a3a5c"
 
 _MAX_NAME_CHARS = 22
 
@@ -188,63 +196,59 @@ def _truncate(name: str, limit: int = _MAX_NAME_CHARS) -> str:
     return name if len(name) <= limit else name[:limit - 1] + "…"
 
 
-# Font cache — populated once after the root window is created via _init_fonts()
-_FONT_LOGO      = None
-_FONT_LOGO_SUB  = None
-_FONT_LABEL_SM  = None
-_FONT_BODY      = None
-_FONT_BODY_MED  = None
+_FONT_LOGO = None
+_FONT_LOGO_SUB = None
+_FONT_LABEL_SM = None
+_FONT_BODY = None
+_FONT_BODY_MED = None
 _FONT_BODY_BOLD = None
-_FONT_TITLE     = None
-_FONT_BTN_LG    = None
-_FONT_MONO      = None
-_FONT_DOT       = None
-_FONT_PENCIL    = None
-_FONT_STATUS    = None
+_FONT_TITLE = None
+_FONT_BTN_LG = None
+_FONT_MONO = None
+_FONT_DOT = None
+_FONT_PENCIL = None
+_FONT_STATUS = None
 
 
 def _init_fonts():
-    """Create all shared CTkFont objects. Must be called after the Tk root exists."""
     global _FONT_LOGO, _FONT_LOGO_SUB, _FONT_LABEL_SM, _FONT_BODY, _FONT_BODY_MED
     global _FONT_BODY_BOLD, _FONT_TITLE, _FONT_BTN_LG, _FONT_MONO, _FONT_DOT
     global _FONT_PENCIL, _FONT_STATUS
-    _FONT_LOGO      = ctk.CTkFont(family="Segoe UI Black", size=24, weight="bold")
-    _FONT_LOGO_SUB  = ctk.CTkFont(family="Segoe UI", size=15, weight="bold")
-    _FONT_LABEL_SM  = ctk.CTkFont(family="Segoe UI", size=9, weight="bold")
-    _FONT_BODY      = ctk.CTkFont(family="Segoe UI", size=11)
-    _FONT_BODY_MED  = ctk.CTkFont(family="Segoe UI", size=12)
+
+    _FONT_LOGO = ctk.CTkFont(family="Segoe UI Black", size=24, weight="bold")
+    _FONT_LOGO_SUB = ctk.CTkFont(family="Segoe UI", size=15, weight="bold")
+    _FONT_LABEL_SM = ctk.CTkFont(family="Segoe UI", size=9, weight="bold")
+    _FONT_BODY = ctk.CTkFont(family="Segoe UI", size=11)
+    _FONT_BODY_MED = ctk.CTkFont(family="Segoe UI", size=12)
     _FONT_BODY_BOLD = ctk.CTkFont(family="Segoe UI", size=13, weight="bold")
-    _FONT_TITLE     = ctk.CTkFont(family="Segoe UI Black", size=24, weight="bold")
-    _FONT_BTN_LG    = ctk.CTkFont(family="Segoe UI", size=14, weight="bold")
-    _FONT_MONO      = ctk.CTkFont(family="Consolas", size=12)
-    _FONT_DOT       = ctk.CTkFont(size=7)
-    _FONT_PENCIL    = ctk.CTkFont(size=11)
-    _FONT_STATUS    = ctk.CTkFont(family="Segoe UI", size=11)
+    _FONT_TITLE = ctk.CTkFont(family="Segoe UI Black", size=24, weight="bold")
+    _FONT_BTN_LG = ctk.CTkFont(family="Segoe UI", size=14, weight="bold")
+    _FONT_MONO = ctk.CTkFont(family="Consolas", size=12)
+    _FONT_DOT = ctk.CTkFont(size=7)
+    _FONT_PENCIL = ctk.CTkFont(size=11)
+    _FONT_STATUS = ctk.CTkFont(family="Segoe UI", size=11)
 
 
 class ModCard(ctk.CTkFrame):
-    """Lightweight mod card — hover bindings only on the frame itself (no recursion)."""
-
     def __init__(self, master, folder_name: str, on_select, on_rename, **kw):
         super().__init__(master, fg_color=BG_CARD, corner_radius=6, height=30, **kw)
         self.pack_propagate(False)
 
-        self._normal        = BG_CARD
-        self._hovered       = BG_CARD_HOV
-        self._selected_col  = "#1e1830"
-        self._is_selected   = False
+        self._normal = BG_CARD
+        self._hovered = BG_CARD_HOV
+        self._selected_col = "#1e1830"
+        self._is_selected = False
 
         self.folder_name = folder_name
-        self.on_select   = on_select
-        self.on_rename   = on_rename
+        self.on_select = on_select
+        self.on_rename = on_rename
 
         self._build()
 
-        # Single binding on the frame — no recursive child iteration
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
         self._name_lbl.bind("<Button-1>", self._click)
-        # Propagate enter/leave from child labels to keep hover consistent
+
         self._name_lbl.bind("<Enter>", self._on_enter)
         self._name_lbl.bind("<Leave>", self._on_leave)
         self._stripe.bind("<Enter>", self._on_enter)
@@ -270,7 +274,6 @@ class ModCard(ctk.CTkFrame):
             hover_color="#2a2040", text_color=ACCENT, font=_FONT_PENCIL,
             corner_radius=4, command=self._rename
         )
-        # Hidden by default — shown on hover
 
     def _on_enter(self, _=None):
         if not self._is_selected:
@@ -314,8 +317,6 @@ class ModCard(ctk.CTkFrame):
 
 
 class ShareDialog(ctk.CTkToplevel):
-    """Modal dialog that zips a mod folder and uploads it, showing a copyable link."""
-
     def __init__(self, master, mod_name: str, mod_path: str):
         super().__init__(master)
         self.title("Share Mod")
@@ -326,37 +327,43 @@ class ShareDialog(ctk.CTkToplevel):
 
         self.mod_name = mod_name
         self.mod_path = mod_path
-        self._link    = ""
+        self._link = ""
 
         self._build()
         self._start_upload()
 
     def _build(self):
-        ctk.CTkLabel(self, text="📤  Share Mod",
-                     font=ctk.CTkFont(family="Segoe UI Black", size=18, weight="bold"),
-                     text_color=ACCENT).pack(pady=(24, 4))
+        ctk.CTkLabel(
+            self, text="📤  Share Mod",
+            font=ctk.CTkFont(family="Segoe UI Black", size=18, weight="bold"),
+            text_color=ACCENT
+        ).pack(pady=(24, 4))
 
-        self._mod_lbl = ctk.CTkLabel(self, text=self.mod_name,
-                                     font=ctk.CTkFont(family="Segoe UI", size=12),
-                                     text_color=TEXT_SEC)
+        self._mod_lbl = ctk.CTkLabel(
+            self, text=self.mod_name,
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color=TEXT_SEC
+        )
         self._mod_lbl.pack()
 
         ctk.CTkFrame(self, height=1, fg_color=TEXT_MUT).pack(fill="x", padx=24, pady=16)
 
-        # Status / progress area
-        self._status_lbl = ctk.CTkLabel(self, text="⏳  Zipping mod…",
-                                        font=ctk.CTkFont(family="Segoe UI", size=12),
-                                        text_color=TEXT_PRI)
+        self._status_lbl = ctk.CTkLabel(
+            self, text="⏳  Zipping mod…",
+            font=ctk.CTkFont(family="Segoe UI", size=12),
+            text_color=TEXT_PRI
+        )
         self._status_lbl.pack(pady=(0, 10))
 
-        self._progress = ctk.CTkProgressBar(self, width=460, height=8,
-                                            fg_color=BG_FIELD, progress_color=ACCENT)
+        self._progress = ctk.CTkProgressBar(
+            self, width=460, height=8,
+            fg_color=BG_FIELD, progress_color=ACCENT
+        )
         self._progress.pack(pady=(0, 16))
         self._progress.set(0)
         self._progress.configure(mode="indeterminate")
         self._progress.start()
 
-        # Link row (hidden until upload succeeds)
         self._link_frame = ctk.CTkFrame(self, fg_color="transparent")
 
         self._link_entry = ctk.CTkEntry(
@@ -376,13 +383,13 @@ class ShareDialog(ctk.CTkToplevel):
         )
         self._copy_btn.pack(side="left")
 
-        # Note label
-        self._note_lbl = ctk.CTkLabel(self,
+        self._note_lbl = ctk.CTkLabel(
+            self,
             text="Links never expire  •  powered by GoFile.io",
             font=ctk.CTkFont(family="Segoe UI", size=10),
-            text_color=TEXT_MUT)
+            text_color=TEXT_MUT
+        )
 
-        # Close button
         self._close_btn = ctk.CTkButton(
             self, text="Close", width=100, height=34,
             fg_color=BG_CARD, hover_color=BG_CARD_HOV, text_color=TEXT_PRI,
@@ -402,7 +409,6 @@ class ShareDialog(ctk.CTkToplevel):
             with tempfile.TemporaryDirectory() as tmp:
                 zip_path = os.path.join(tmp, f"{self.mod_name}.zip")
 
-                # --- Step 1: zip (ZIP_STORED — pak files are already compressed) ---
                 with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
                     for fname in os.listdir(self.mod_path):
                         fpath = os.path.join(self.mod_path, fname)
@@ -410,10 +416,8 @@ class ShareDialog(ctk.CTkToplevel):
                             zf.write(fpath, fname)
 
                 zip_size = os.path.getsize(zip_path)
-                self.after(0, lambda: self._status_lbl.configure(
-                    text=f"\u23f3  Getting upload server\u2026"))
+                self.after(0, lambda: self._status_lbl.configure(text="⏳  Getting upload server…"))
 
-                # --- Step 2: ask GoFile for the best server ---
                 ctx = ssl.create_default_context()
 
                 def https_get(host, path):
@@ -429,36 +433,36 @@ class ShareDialog(ctk.CTkToplevel):
                     raise RuntimeError("GoFile: could not get server list")
                 server = info["data"]["servers"][0]["name"]
 
-                self.after(0, lambda: self._status_lbl.configure(
-                    text=f"\u2b06\ufe0f  Uploading {_format_bytes(zip_size)}\u2026"))
+                self.after(0, lambda: self._status_lbl.configure(text=f"⬆️  Uploading {_format_bytes(zip_size)}…"))
                 self.after(0, lambda: self._progress.configure(mode="determinate"))
                 self.after(0, self._progress.stop)
                 self.after(0, lambda: self._progress.set(0))
 
-                # --- Step 3: multipart upload to chosen GoFile server ---
                 boundary = b"DBDPakBoundary"
                 zip_name = f"{self.mod_name}.zip".encode()
-                header   = (
+
+                header = (
                     b"--" + boundary + b"\r\n"
                     b'Content-Disposition: form-data; name="file"; filename="' + zip_name + b'"\r\n'
                     b"Content-Type: application/zip\r\n\r\n"
                 )
+
                 footer = b"\r\n--" + boundary + b"--\r\n"
-                total  = len(header) + zip_size + len(footer)
+                total = len(header) + zip_size + len(footer)
 
                 conn = http.client.HTTPSConnection(f"{server}.gofile.io", timeout=120, context=ctx)
                 conn.putrequest("POST", "/contents/uploadfile")
-                conn.putheader("Content-Type",   f"multipart/form-data; boundary={boundary.decode()}")
-                conn.putheader("Content-Length",  str(total))
-                conn.putheader("User-Agent",      "DBDPakLoader/1.0")
-                conn.putheader("Connection",      "close")
+                conn.putheader("Content-Type", f"multipart/form-data; boundary={boundary.decode()}")
+                conn.putheader("Content-Length", str(total))
+                conn.putheader("User-Agent", "DBDPakLoader/1.0")
+                conn.putheader("Connection", "close")
                 conn.endheaders()
 
                 conn.send(header)
-                sent    = len(header)
-                chunk   = 65536
+                sent = len(header)
+                chunk = 65536
                 t_start = time.monotonic()
-                t_last  = t_start
+                t_last = t_start
 
                 with open(zip_path, "rb") as fh:
                     while True:
@@ -467,22 +471,24 @@ class ShareDialog(ctk.CTkToplevel):
                             break
                         conn.send(data)
                         sent += len(data)
-                        now   = time.monotonic()
-                        frac  = min(sent / total, 1.0)
+
+                        now = time.monotonic()
+                        frac = min(sent / total, 1.0)
+
                         if now - t_last >= 0.1:
-                            elapsed  = max(now - t_start, 0.001)
-                            speed    = sent / elapsed
-                            pct      = int(frac * 100)
-                            lbl_text = f"\u2b06\ufe0f  {pct}%  \u2022  {_format_bytes(int(speed))}/s"
+                            elapsed = max(now - t_start, 0.001)
+                            speed = sent / elapsed
+                            pct = int(frac * 100)
+                            lbl_text = f"⬆️  {pct}%  •  {_format_bytes(int(speed))}/s"
                             self.after(0, lambda t=lbl_text: self._status_lbl.configure(text=t))
-                            self.after(0, lambda f=frac:    self._progress.set(f))
+                            self.after(0, lambda f=frac: self._progress.set(f))
                             t_last = now
 
                 conn.send(footer)
-                self.after(0, lambda: self._status_lbl.configure(text="\u23f3  Waiting for server\u2026"))
+                self.after(0, lambda: self._status_lbl.configure(text="⏳  Waiting for server…"))
                 self.after(0, lambda: self._progress.set(1.0))
 
-                resp   = conn.getresponse()
+                resp = conn.getresponse()
                 result = json.loads(resp.read().decode())
                 conn.close()
 
@@ -494,6 +500,7 @@ class ShareDialog(ctk.CTkToplevel):
 
         except Exception as e:
             self.after(0, lambda: self._on_error(str(e)))
+
     def _on_success(self, link: str):
         self._link = link
         self._progress.stop()
@@ -503,14 +510,13 @@ class ShareDialog(ctk.CTkToplevel):
 
         self._status_lbl.configure(text="✅  Upload complete! Share this link:", text_color=GREEN)
 
-        # Populate and show link row
         self._link_entry.configure(state="normal")
         self._link_entry.insert(0, link)
         self._link_entry.configure(state="readonly")
+
         self._link_frame.pack(pady=(0, 8))
         self._note_lbl.pack(pady=(0, 4))
 
-        # Auto-copy to clipboard
         self.clipboard_clear()
         self.clipboard_append(link)
 
@@ -536,7 +542,7 @@ _BaseClass = TkinterDnD.Tk if _HAS_DND else ctk.CTk
 class DBDModLoader(_BaseClass):
     def __init__(self):
         super().__init__()
-        _init_fonts()  # Root window now exists — safe to create CTkFont objects
+        _init_fonts()
 
         self.title("DBD Pak Loader")
         self.geometry("1320x800")
@@ -551,22 +557,20 @@ class DBDModLoader(_BaseClass):
         self.custom_paks_path = None
 
         self.platforms = {
-            "Steam  (-Windows)":       {"suffix": "-Windows", "path": r"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks"},
-            "Epic Games  (-EGS)":      {"suffix": "-EGS",     "path": r"C:\Program Files\Epic Games\DeadByDaylight\DeadByDaylight\Content\Paks"},
-            "Microsoft Store  (-WinGDK)": {"suffix": "-WinGDK","path": r"C:\XboxGames\Dead by Daylight\Content\DeadByDaylight\Content\Paks"},
-            "Custom Path":             {"suffix": "",          "path": ""}
+            "Steam  (-Windows)": {"suffix": "-Windows", "path": r"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks"},
+            "Epic Games  (-EGS)": {"suffix": "-EGS", "path": r"C:\Program Files\Epic Games\DeadByDaylight\DeadByDaylight\Content\Paks"},
+            "Microsoft Store  (-WinGDK)": {"suffix": "-WinGDK", "path": r"C:\XboxGames\Dead by Daylight\Content\DeadByDaylight\Content\Paks"},
+            "Custom Path": {"suffix": "", "path": ""}
         }
 
-        self.current_mod      = None
+        self.current_mod = None
         self.current_mod_path = None
         self._card_map: dict[str, ModCard] = {}
 
-        # Cache for paks path + suffix — invalidated on platform change
-        self._paks_cache: Path | None  = None
-        self._paks_cache_valid          = False
-        self._suffix_cache: str | None  = None
+        self._paks_cache: Path | None = None
+        self._paks_cache_valid = False
+        self._suffix_cache: str | None = None
 
-        # Debounce timer for search
         self._search_after_id = None
 
         os.makedirs(self.mods_dir, exist_ok=True)
@@ -580,12 +584,8 @@ class DBDModLoader(_BaseClass):
             self.dnd_bind("<<Drop>>", self._on_drop)
             self._setup_drag_feedback()
 
-        # Defer auto-detect so window appears immediately
         self.after(50, self._attempt_auto_detect)
-        # Check for updates silently in background
         threading.Thread(target=self._check_for_update, daemon=True).start()
-
-    # ── Config ──────────────────────────────────────────────────────────────
 
     def _load_config(self):
         if self.config_file.exists():
@@ -595,7 +595,6 @@ class DBDModLoader(_BaseClass):
                 self.custom_paks_path = data.get("custom_paks_path")
                 last_platform = data.get("last_platform")
                 if last_platform and last_platform in self.platforms:
-                    # platform_var doesn't exist yet at this point — stored and applied in _build_ui
                     self._pending_platform = last_platform
                 else:
                     self._pending_platform = None
@@ -624,23 +623,23 @@ class DBDModLoader(_BaseClass):
         else:
             self.status_var.set(msg)
 
-    # ── Cache helpers ────────────────────────────────────────────────────────
-
     def _invalidate_paks_cache(self):
         self._paks_cache_valid = False
-        self._paks_cache       = None
-        self._suffix_cache     = None
+        self._paks_cache = None
+        self._suffix_cache = None
 
     def get_active_paks_path(self) -> Path | None:
         if self._paks_cache_valid:
             return self._paks_cache
+
         platform = self.platform_var.get()
         if platform == "Custom Path":
             p = Path(self.custom_paks_path) if self.custom_paks_path else None
         else:
             p = Path(self.platforms[platform]["path"])
+
         result = p if (p and p.exists()) else None
-        self._paks_cache       = result
+        self._paks_cache = result
         self._paks_cache_valid = True
         return result
 
@@ -652,8 +651,6 @@ class DBDModLoader(_BaseClass):
         self._suffix_cache = s
         return s
 
-    # ── UI Build ─────────────────────────────────────────────────────────────
-
     def _build_ui(self):
         self._build_statusbar()
         self._build_sidebar()
@@ -663,13 +660,12 @@ class DBDModLoader(_BaseClass):
         bar = ctk.CTkFrame(self, height=26, fg_color=BG_PANEL, corner_radius=0)
         bar.pack(side="bottom", fill="x")
         bar.pack_propagate(False)
+
         self.status_var = ctk.StringVar(value="Ready")
         ctk.CTkLabel(bar, textvariable=self.status_var, font=_FONT_STATUS, text_color=TEXT_SEC).pack(side="left", padx=16, pady=4)
 
-        # Version label (right side of statusbar)
         ctk.CTkLabel(bar, text=f"v{VERSION}", font=_FONT_STATUS, text_color=TEXT_MUT).pack(side="right", padx=16, pady=4)
 
-        # Update badge — hidden until an update is found
         self._update_btn = ctk.CTkButton(
             bar, text="⬆ Update Available — Click to install",
             height=20, font=_FONT_STATUS,
@@ -678,6 +674,7 @@ class DBDModLoader(_BaseClass):
             text_color=GREEN, corner_radius=6,
             command=self._do_update
         )
+
         self._dl_frame = ctk.CTkFrame(bar, fg_color="transparent")
         self._dl_label = ctk.CTkLabel(self._dl_frame, text="", font=_FONT_STATUS, text_color=TEXT_SEC)
         self._dl_label.pack(side="left", padx=(0, 10))
@@ -688,6 +685,19 @@ class DBDModLoader(_BaseClass):
 
         self._dl_frame.pack_forget()
 
+    def _show_download_bar(self, text="Downloading..."):
+        self._dl_label.configure(text=text)
+        self._dl_bar.set(0)
+        self._dl_frame.pack(side="right", padx=(0, 10), pady=3)
+
+    def _hide_download_bar(self):
+        self._dl_frame.pack_forget()
+
+    def _set_download_progress(self, frac: float, text: str | None = None):
+        if text is not None:
+            self._dl_label.configure(text=text)
+        self._dl_bar.set(max(0, min(frac, 1)))
+
     def _build_sidebar(self):
         sidebar = ctk.CTkFrame(self, width=290, fg_color=BG_PANEL, corner_radius=0)
         sidebar.pack(side="left", fill="y")
@@ -695,13 +705,13 @@ class DBDModLoader(_BaseClass):
 
         logo_row = ctk.CTkFrame(sidebar, fg_color="transparent")
         logo_row.pack(fill="x", padx=20, pady=(20, 0))
-        ctk.CTkLabel(logo_row, text="DBD",       font=_FONT_LOGO,     text_color=ACCENT).pack(side="left")
+        ctk.CTkLabel(logo_row, text="DBD", font=_FONT_LOGO, text_color=ACCENT).pack(side="left")
         ctk.CTkLabel(logo_row, text=" Pak Loader", font=_FONT_LOGO_SUB, text_color=TEXT_PRI).pack(side="left", pady=(1, 0))
 
         ctk.CTkFrame(sidebar, height=1, fg_color=TEXT_MUT).pack(fill="x", padx=16, pady=(12, 0))
         ctk.CTkLabel(sidebar, text="MODS", font=_FONT_LABEL_SM, text_color=TEXT_MUT).pack(anchor="w", padx=20, pady=(10, 3))
 
-        self.search_var   = ctk.StringVar()
+        self.search_var = ctk.StringVar()
         self.search_entry = ctk.CTkEntry(
             sidebar, textvariable=self.search_var,
             placeholder_text="Search mods...", height=34,
@@ -709,7 +719,6 @@ class DBDModLoader(_BaseClass):
             border_color=TEXT_MUT, corner_radius=9, font=_FONT_BODY_MED
         )
         self.search_entry.pack(fill="x", padx=16, pady=(0, 10))
-        # Debounced search — avoids re-rendering on every keystroke
         self.search_entry.bind("<KeyRelease>", self._on_search_key)
 
         self.mods_scroll = ctk.CTkScrollableFrame(
@@ -787,18 +796,15 @@ class DBDModLoader(_BaseClass):
         self._content = ctk.CTkFrame(self.main_area, fg_color="transparent")
         self._content.pack(fill="both", expand=True)
 
-        # ── Empty state ──
         self.empty_frame = ctk.CTkFrame(self._content, fg_color="transparent")
         self.empty_frame.place(relx=0.5, rely=0.5, anchor="center")
-        ctk.CTkLabel(self.empty_frame, text="📦", font=ctk.CTkFont(size=60)).pack()
-        ctk.CTkLabel(self.empty_frame, text="Select a mod to get started",
-                     font=_FONT_TITLE, text_color=TEXT_PRI).pack(pady=(10, 5))
-        dnd_hint = ("Drag & drop archives or folders here to import" if _HAS_DND
-                    else "Import a mod folder or archive using the button below.")
-        ctk.CTkLabel(self.empty_frame, text=dnd_hint, font=_FONT_BODY_MED,
-                     text_color=TEXT_SEC, wraplength=380).pack()
 
-        # ── Detail panel ──
+        ctk.CTkLabel(self.empty_frame, text="📦", font=ctk.CTkFont(size=60)).pack()
+        ctk.CTkLabel(self.empty_frame, text="Select a mod to get started", font=_FONT_TITLE, text_color=TEXT_PRI).pack(pady=(10, 5))
+
+        dnd_hint = ("Drag & drop archives or folders here to import" if _HAS_DND else "Import a mod folder or archive using the button below.")
+        ctk.CTkLabel(self.empty_frame, text=dnd_hint, font=_FONT_BODY_MED, text_color=TEXT_SEC, wraplength=380).pack()
+
         self.detail_frame = ctk.CTkFrame(self._content, fg_color="transparent")
 
         title_row = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
@@ -807,49 +813,49 @@ class DBDModLoader(_BaseClass):
         self.mod_title = ctk.CTkLabel(title_row, text="", font=_FONT_TITLE, text_color=TEXT_PRI, anchor="w")
         self.mod_title.pack(side="left")
 
-        self.mod_status_badge = ctk.CTkLabel(title_row, text="", font=_FONT_BODY,
-                                             fg_color=BG_CARD, corner_radius=7, padx=10, pady=3)
+        self.mod_status_badge = ctk.CTkLabel(title_row, text="", font=_FONT_BODY, fg_color=BG_CARD, corner_radius=7, padx=10, pady=3)
         self.mod_status_badge.pack(side="left", padx=(14, 0), pady=(3, 0))
 
-        self.mod_stats_badge = ctk.CTkLabel(title_row, text="", font=_FONT_BODY,
-                                            fg_color=BG_CARD, corner_radius=7, padx=10, pady=3, text_color=TEXT_SEC)
+        self.mod_stats_badge = ctk.CTkLabel(title_row, text="", font=_FONT_BODY, fg_color=BG_CARD, corner_radius=7, padx=10, pady=3, text_color=TEXT_SEC)
         self.mod_stats_badge.pack(side="left", padx=(10, 0), pady=(3, 0))
 
         self.conflict_label = ctk.CTkLabel(title_row, text="", font=_FONT_BODY, text_color=ORANGE)
         self.conflict_label.pack(side="left", padx=(10, 0), pady=(3, 0))
 
-        ctk.CTkButton(title_row, text="📁 Open Folder", width=110, height=28,
-                      fg_color="transparent", hover_color=BG_CARD_HOV,
-                      border_width=1, border_color=TEXT_MUT, text_color=TEXT_PRI,
-                      corner_radius=7, command=self._open_current_mod_folder
-                      ).pack(side="left", padx=(16, 0), pady=(3, 0))
+        ctk.CTkButton(
+            title_row, text="📁 Open Folder", width=110, height=28,
+            fg_color="transparent", hover_color=BG_CARD_HOV,
+            border_width=1, border_color=TEXT_MUT, text_color=TEXT_PRI,
+            corner_radius=7, command=self._open_current_mod_folder
+        ).pack(side="left", padx=(16, 0), pady=(3, 0))
 
-        ctk.CTkButton(title_row, text="✏ Rename", width=90, height=28,
-                      fg_color="transparent", hover_color="#2a2040",
-                      border_width=1, border_color=ACCENT_DIM, text_color=ACCENT,
-                      corner_radius=7, command=self._rename_current
-                      ).pack(side="left", padx=(8, 0), pady=(3, 0))
+        ctk.CTkButton(
+            title_row, text="✏ Rename", width=90, height=28,
+            fg_color="transparent", hover_color="#2a2040",
+            border_width=1, border_color=ACCENT_DIM, text_color=ACCENT,
+            corner_radius=7, command=self._rename_current
+        ).pack(side="left", padx=(8, 0), pady=(3, 0))
 
-        ctk.CTkButton(title_row, text="🗑 Delete", width=80, height=28,
-                      fg_color="transparent", hover_color="#3a1a1a",
-                      border_width=1, border_color=RED, text_color=RED,
-                      corner_radius=7, command=self._delete_current
-                      ).pack(side="left", padx=(8, 0), pady=(3, 0))
+        ctk.CTkButton(
+            title_row, text="🗑 Delete", width=80, height=28,
+            fg_color="transparent", hover_color="#3a1a1a",
+            border_width=1, border_color=RED, text_color=RED,
+            corner_radius=7, command=self._delete_current
+        ).pack(side="left", padx=(8, 0), pady=(3, 0))
 
-        ctk.CTkButton(title_row, text="🔗 Share", width=80, height=28,
-                      fg_color="transparent", hover_color="#1a2a1a",
-                      border_width=1, border_color=GREEN, text_color=GREEN,
-                      corner_radius=7, command=self._share_current
-                      ).pack(side="left", padx=(8, 0), pady=(3, 0))
+        ctk.CTkButton(
+            title_row, text="🔗 Share", width=80, height=28,
+            fg_color="transparent", hover_color="#1a2a1a",
+            border_width=1, border_color=GREEN, text_color=GREEN,
+            corner_radius=7, command=self._share_current
+        ).pack(side="left", padx=(8, 0), pady=(3, 0))
 
-        ctk.CTkLabel(self.detail_frame, text="Files in mod",
-                     font=_FONT_LABEL_SM, text_color=TEXT_MUT).pack(anchor="w", padx=30, pady=(18, 5))
+        ctk.CTkLabel(self.detail_frame, text="Files in mod", font=_FONT_LABEL_SM, text_color=TEXT_MUT).pack(anchor="w", padx=30, pady=(18, 5))
 
         files_outer = ctk.CTkFrame(self.detail_frame, fg_color=BG_FIELD, corner_radius=12)
         files_outer.pack(fill="both", expand=True, padx=30)
 
-        self.files_container = ctk.CTkScrollableFrame(files_outer, fg_color="transparent",
-                                                       scrollbar_button_color=TEXT_MUT)
+        self.files_container = ctk.CTkScrollableFrame(files_outer, fg_color="transparent", scrollbar_button_color=TEXT_MUT)
         self.files_container.pack(fill="both", expand=True, padx=4, pady=4)
 
         btn_row = ctk.CTkFrame(self.detail_frame, fg_color="transparent")
@@ -875,17 +881,12 @@ class DBDModLoader(_BaseClass):
         self.main_area.bind("<Enter>", lambda e: self.main_area.configure(fg_color="#1a1a2e") if _HAS_DND else None)
         self.main_area.bind("<Leave>", lambda e: self.main_area.configure(fg_color=self.original_bg) if _HAS_DND else None)
 
-    # ── Search debounce ──────────────────────────────────────────────────────
-
     def _on_search_key(self, _=None):
         if self._search_after_id:
             self.after_cancel(self._search_after_id)
         self._search_after_id = self.after(180, self.load_mods)
 
-    # ── Core Methods ─────────────────────────────────────────────────────────
-
     def load_mods(self):
-        # Destroy existing cards
         for w in self.mods_scroll.winfo_children():
             w.destroy()
         self._card_map.clear()
@@ -896,16 +897,13 @@ class DBDModLoader(_BaseClass):
             folders = [f for f in folders if query in f.lower()]
 
         if not folders:
-            ctk.CTkLabel(self.mods_scroll, text="No mods found.", font=_FONT_BODY_MED,
-                         text_color=TEXT_SEC, justify="center").pack(pady=40)
+            ctk.CTkLabel(self.mods_scroll, text="No mods found.", font=_FONT_BODY_MED, text_color=TEXT_SEC, justify="center").pack(pady=40)
             return
 
-        # Compute install status once per mod (single listdir each) for sorting + display
         paks_path = self.get_active_paks_path()
-        suffix    = self.get_active_suffix()
+        suffix = self.get_active_suffix()
         installed_set = self._batch_check_installed(folders, paks_path, suffix)
 
-        # Sort: installed first, then alphabetical
         folders.sort(key=lambda f: (0 if f in installed_set else 1, f.lower()))
 
         for folder in folders:
@@ -914,16 +912,13 @@ class DBDModLoader(_BaseClass):
             self._card_map[folder] = card
             card.set_installed(folder in installed_set)
 
-        # Re-apply selection highlight without triggering a full select_mod refresh
         if self.current_mod and self.current_mod in self._card_map:
             self._card_map[self.current_mod].set_selected(True)
 
     def _batch_check_installed(self, folders: list[str], paks_path: Path | None, suffix: str) -> set[str]:
-        """Return set of folder names whose files exist in paks_path."""
         installed = set()
         if not paks_path or not paks_path.exists():
             return installed
-        # Snapshot paks dir once — avoids repeated filesystem calls
         try:
             paks_files = {f.lower() for f in os.listdir(paks_path)}
         except OSError:
@@ -945,18 +940,14 @@ class DBDModLoader(_BaseClass):
                             break
             except OSError:
                 continue
-        return installed
 
-    def _update_card_install_status(self, folder_name: str, card: ModCard):
-        paks_path = self.get_active_paks_path()
-        suffix    = self.get_active_suffix()
-        result    = self._batch_check_installed([folder_name], paks_path, suffix)
-        card.set_installed(folder_name in result)
+        return installed
 
     def _on_drop(self, event):
         self.main_area.configure(fg_color=self.original_bg)
         raw = event.data.strip()
         paths = []
+
         if raw.startswith("{"):
             import re
             paths = re.findall(r'\{([^}]+)\}|(\S+)', raw)
@@ -982,7 +973,7 @@ class DBDModLoader(_BaseClass):
         for name, card in self._card_map.items():
             card.set_selected(name == folder_name)
 
-        self.current_mod      = folder_name
+        self.current_mod = folder_name
         self.current_mod_path = os.path.join(self.mods_dir, folder_name)
 
         self.empty_frame.place_forget()
@@ -992,12 +983,12 @@ class DBDModLoader(_BaseClass):
 
         installed = self.is_mod_installed()
         if installed:
-            self.mod_status_badge.configure(text="● Installed",     text_color=GREEN,  fg_color="#0d2a1a")
-            self.add_btn.configure(text="RE-ADD TO PAKS",            fg_color=ORANGE,   hover_color="#c2410c", text_color="black")
+            self.mod_status_badge.configure(text="● Installed", text_color=GREEN, fg_color="#0d2a1a")
+            self.add_btn.configure(text="RE-ADD TO PAKS", fg_color=ORANGE, hover_color="#c2410c", text_color="black")
             self.remove_btn.configure(state="normal")
         else:
-            self.mod_status_badge.configure(text="● Not Installed",  text_color=ORANGE, fg_color="#2a1a0d")
-            self.add_btn.configure(text="ADD TO PAKS",               fg_color=ACCENT,   hover_color=ACCENT_DIM, text_color="black")
+            self.mod_status_badge.configure(text="● Not Installed", text_color=ORANGE, fg_color="#2a1a0d")
+            self.add_btn.configure(text="ADD TO PAKS", fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black")
             self.remove_btn.configure(state="disabled")
 
         file_count, total_size = self._compute_mod_stats()
@@ -1031,8 +1022,10 @@ class DBDModLoader(_BaseClass):
     def _check_conflicts(self) -> list[str]:
         if not self.current_mod_path:
             return []
+
         suffix = self.get_active_suffix()
         target_files: set[str] = set()
+
         for file in os.listdir(self.current_mod_path):
             if os.path.isfile(os.path.join(self.current_mod_path, file)):
                 base, ext = os.path.splitext(file)
@@ -1067,12 +1060,14 @@ class DBDModLoader(_BaseClass):
     def on_platform_change(self, _):
         self._invalidate_paks_cache()
         self._save_config()
-        # Refresh all card statuses efficiently
-        paks_path    = self.get_active_paks_path()
-        suffix       = self.get_active_suffix()
+
+        paks_path = self.get_active_paks_path()
+        suffix = self.get_active_suffix()
         installed_set = self._batch_check_installed(list(self._card_map.keys()), paks_path, suffix)
+
         for folder, card in self._card_map.items():
             card.set_installed(folder in installed_set)
+
         if self.current_mod:
             self.select_mod(self.current_mod)
 
@@ -1099,15 +1094,19 @@ class DBDModLoader(_BaseClass):
         new_name = simpledialog.askstring("Rename Mod", f"New name for '{folder_name}':", initialvalue=folder_name, parent=self)
         if not new_name or new_name.strip() == folder_name:
             return
+
         new_name = new_name.strip()
         if any(c in new_name for c in r'\/:*?"<>|'):
             messagebox.showerror("Invalid Name", "Name contains invalid characters.")
             return
+
         old_path = os.path.join(self.mods_dir, folder_name)
         new_path = os.path.join(self.mods_dir, new_name)
+
         if os.path.exists(new_path):
             messagebox.showerror("Name Taken", f"A mod named '{new_name}' already exists.")
             return
+
         try:
             os.rename(old_path, new_path)
         except Exception as e:
@@ -1120,7 +1119,7 @@ class DBDModLoader(_BaseClass):
             self._card_map[new_name] = card
 
         if self.current_mod == folder_name:
-            self.current_mod      = new_name
+            self.current_mod = new_name
             self.current_mod_path = new_path
             self.mod_title.configure(text=new_name)
 
@@ -1130,6 +1129,7 @@ class DBDModLoader(_BaseClass):
     def delete_mod(self, folder_name: str):
         if not messagebox.askyesno("Delete Mod", f"Remove '{folder_name}' from the loader?\n\nFiles in Paks folder will NOT be removed."):
             return
+
         try:
             shutil.rmtree(os.path.join(self.mods_dir, folder_name))
         except Exception as e:
@@ -1137,7 +1137,7 @@ class DBDModLoader(_BaseClass):
             return
 
         if self.current_mod == folder_name:
-            self.current_mod      = None
+            self.current_mod = None
             self.current_mod_path = None
             self.detail_frame.place_forget()
             self.empty_frame.place(relx=0.5, rely=0.5, anchor="center")
@@ -1153,38 +1153,42 @@ class DBDModLoader(_BaseClass):
         suffix = self.get_active_suffix()
 
         if not files:
-            ctk.CTkLabel(self.files_container, text="No files found in this mod folder.",
-                         font=_FONT_BODY_MED, text_color=TEXT_SEC).pack(padx=20, pady=16)
+            ctk.CTkLabel(self.files_container, text="No files found in this mod folder.", font=_FONT_BODY_MED, text_color=TEXT_SEC).pack(padx=20, pady=16)
             return
 
         for i, file in enumerate(files):
             base, ext = os.path.splitext(file)
-            new_name  = ("-".join(base.split("-")[:-1]) + suffix + ext if "-" in base and suffix else base + suffix + ext)
+            new_name = ("-".join(base.split("-")[:-1]) + suffix + ext if "-" in base and suffix else base + suffix + ext)
 
-            row = ctk.CTkFrame(self.files_container,
-                               fg_color="#16162a" if i % 2 == 0 else "transparent", corner_radius=7)
+            row = ctk.CTkFrame(self.files_container, fg_color="#16162a" if i % 2 == 0 else "transparent", corner_radius=7)
             row.pack(fill="x", padx=4, pady=2)
 
-            ctk.CTkLabel(row, text="→",      font=_FONT_MONO, text_color=ACCENT,    width=22).pack(side="left", padx=(10, 5), pady=7)
+            ctk.CTkLabel(row, text="→", font=_FONT_MONO, text_color=ACCENT, width=22).pack(side="left", padx=(10, 5), pady=7)
             ctk.CTkLabel(row, text=new_name, font=_FONT_MONO, text_color="#b8b8ff", anchor="w").pack(side="left", fill="x", expand=True, pady=7)
 
     def set_custom_game_path(self):
         folder = filedialog.askdirectory(title="Select Dead by Daylight Install Folder")
         if not folder:
             return
+
         root = Path(folder)
         paks = _find_paks_from_game_root(root)
+
         if not paks:
             messagebox.showerror("Invalid Folder", "Could not locate Content\\Paks inside that folder.")
             return
-        self.custom_game_root               = str(root)
-        self.custom_paks_path               = str(paks)
+
+        self.custom_game_root = str(root)
+        self.custom_paks_path = str(paks)
         self.platforms["Custom Path"]["path"] = str(paks)
         self.platform_var.set("Custom Path")
+
         self._invalidate_paks_cache()
         self._save_config()
+
         self.status_var.set(f"Custom path set: {paks}")
         self.load_mods()
+
         if self.current_mod:
             self.select_mod(self.current_mod)
 
@@ -1193,20 +1197,23 @@ class DBDModLoader(_BaseClass):
         if not paks_path:
             messagebox.showerror("Not Found", "Paks folder not found.")
             return
+
         if not messagebox.askyesno("Clean DBD Paks", "This will remove ALL mod files from your Paks folder.\nContinue?"):
             return
 
-        suffix  = self.get_active_suffix()
+        suffix = self.get_active_suffix()
         removed = 0
+
         for mod_folder in os.listdir(self.mods_dir):
             mod_path = Path(self.mods_dir) / mod_folder
             if not mod_path.is_dir():
                 continue
+
             for file in os.listdir(mod_path):
                 if os.path.isfile(mod_path / file):
-                    base, ext    = os.path.splitext(file)
-                    final_name   = ("-".join(base.split("-")[:-1]) + suffix + ext if "-" in base and suffix else base + suffix + ext)
-                    target       = paks_path / final_name
+                    base, ext = os.path.splitext(file)
+                    final_name = ("-".join(base.split("-")[:-1]) + suffix + ext if "-" in base and suffix else base + suffix + ext)
+                    target = paks_path / final_name
                     if target.exists():
                         try:
                             target.unlink()
@@ -1217,17 +1224,22 @@ class DBDModLoader(_BaseClass):
         self._invalidate_paks_cache()
         self.status_var.set(f"🧹 Cleaned: removed {removed} file(s)")
         self.load_mods()
+
         if self.current_mod:
             self.select_mod(self.current_mod)
 
     def import_mod_folder(self):
         all_exts = "*.zip *.ZIP"
-        if _HAS_RAR: all_exts += " *.rar *.RAR *.cbr"
-        if _HAS_7Z:  all_exts += " *.7z *.7Z"
+        if _HAS_RAR:
+            all_exts += " *.rar *.RAR *.cbr"
+        if _HAS_7Z:
+            all_exts += " *.7z *.7Z"
 
         types = [("Mod archives", all_exts), ("ZIP archive", "*.zip *.ZIP")]
-        if _HAS_RAR: types.append(("RAR archive", "*.rar *.RAR *.cbr"))
-        if _HAS_7Z:  types.append(("7-Zip archive", "*.7z *.7Z"))
+        if _HAS_RAR:
+            types.append(("RAR archive", "*.rar *.RAR *.cbr"))
+        if _HAS_7Z:
+            types.append(("7-Zip archive", "*.7z *.7Z"))
         types.append(("All files", "*.*"))
 
         paths = filedialog.askopenfilenames(title="Select Mod Archive(s)", filetypes=types)
@@ -1249,27 +1261,34 @@ class DBDModLoader(_BaseClass):
 
     def _do_import(self, path: str, silent: bool = False):
         p = Path(path)
+
         if p.is_dir():
             name = p.name.strip()
             dest = os.path.join(self.mods_dir, name)
+
             if os.path.exists(dest):
                 if not messagebox.askyesno("Overwrite", f"Mod '{name}' already exists.\nOverwrite?"):
                     return
                 shutil.rmtree(dest)
+
             shutil.copytree(str(p), dest)
+
             if not silent:
                 messagebox.showinfo("Imported", f"Mod '{name}' imported successfully.")
+
             self.status_var.set(f"Imported: {name}")
             if not silent:
                 self.load_mods()
             return
 
         suffix = p.suffix.lower()
-        name   = p.stem
+        name = p.stem
+
         if suffix not in {".zip", ".rar", ".cbr", ".7z"}:
             raise RuntimeError(f"Unsupported format: {suffix}")
 
         dest = os.path.join(self.mods_dir, name)
+
         if os.path.exists(dest):
             if not messagebox.askyesno("Overwrite", f"Mod '{name}' already exists.\nOverwrite?"):
                 return
@@ -1281,14 +1300,19 @@ class DBDModLoader(_BaseClass):
         try:
             with tempfile.TemporaryDirectory() as tmp:
                 _extract_archive(path, tmp, suffix)
+
                 entries = [e for e in os.listdir(tmp) if not e.startswith("__MACOSX")]
-                extracted_root = (os.path.join(tmp, entries[0])
-                                  if len(entries) == 1 and os.path.isdir(os.path.join(tmp, entries[0]))
-                                  else tmp)
+                extracted_root = (
+                    os.path.join(tmp, entries[0])
+                    if len(entries) == 1 and os.path.isdir(os.path.join(tmp, entries[0]))
+                    else tmp
+                )
+
                 shutil.copytree(extracted_root, dest, dirs_exist_ok=True)
 
             if not silent:
                 messagebox.showinfo("Imported", f"Mod '{name}' imported successfully.")
+
             self.status_var.set(f"Imported: {name}")
             if not silent:
                 self.load_mods()
@@ -1312,15 +1336,16 @@ class DBDModLoader(_BaseClass):
     def install_mod(self):
         if not self.current_mod:
             return
+
         paks_path = self.get_active_paks_path()
         if not paks_path:
             messagebox.showerror("Path Error", "Paks folder not found.")
             return
 
-        suffix    = self.get_active_suffix()
+        suffix = self.get_active_suffix()
         conflicts = self._check_conflicts()
-        if conflicts and not messagebox.askyesno("Conflict Detected",
-                f"This mod conflicts with:\n{', '.join(conflicts)}\n\nContinue anyway?"):
+
+        if conflicts and not messagebox.askyesno("Conflict Detected", f"This mod conflicts with:\n{', '.join(conflicts)}\n\nContinue anyway?"):
             return
 
         self.add_btn.configure(text="ADDING…", state="disabled")
@@ -1330,14 +1355,15 @@ class DBDModLoader(_BaseClass):
         try:
             files = [f for f in os.listdir(self.current_mod_path) if os.path.isfile(os.path.join(self.current_mod_path, f))]
             for file in files:
-                src      = Path(self.current_mod_path) / file
+                src = Path(self.current_mod_path) / file
                 base, ext = os.path.splitext(file)
-                new_name  = ("-".join(base.split("-")[:-1]) + suffix + ext if "-" in base and suffix else base + suffix + ext)
+                new_name = ("-".join(base.split("-")[:-1]) + suffix + ext if "-" in base and suffix else base + suffix + ext)
                 shutil.copy2(src, paks_path / new_name)
 
             self._invalidate_paks_cache()
             self.status_var.set(f"✅ {self.current_mod} added")
             messagebox.showinfo("Success", f"'{self.current_mod}' added successfully.")
+
             self.load_mods()
             self.select_mod(self.current_mod)
 
@@ -1349,6 +1375,7 @@ class DBDModLoader(_BaseClass):
     def uninstall_mod(self):
         if not self.current_mod:
             return
+
         if not messagebox.askyesno("Confirm Remove", f"Remove '{self.current_mod}' from Paks folder?"):
             return
 
@@ -1363,11 +1390,12 @@ class DBDModLoader(_BaseClass):
         self.update_idletasks()
 
         try:
-            files   = [f for f in os.listdir(self.current_mod_path) if os.path.isfile(os.path.join(self.current_mod_path, f))]
+            files = [f for f in os.listdir(self.current_mod_path) if os.path.isfile(os.path.join(self.current_mod_path, f))]
             removed = 0
+
             for file in files:
                 base, ext = os.path.splitext(file)
-                new_name  = ("-".join(base.split("-")[:-1]) + suffix + ext if "-" in base and suffix else base + suffix + ext)
+                new_name = ("-".join(base.split("-")[:-1]) + suffix + ext if "-" in base and suffix else base + suffix + ext)
                 t = paks_path / new_name
                 if t.exists():
                     t.unlink()
@@ -1376,6 +1404,7 @@ class DBDModLoader(_BaseClass):
             self._invalidate_paks_cache()
             self.status_var.set(f"✅ {self.current_mod} removed")
             messagebox.showinfo("Removed", f"Removed {removed} file(s) for '{self.current_mod}'")
+
             self.load_mods()
             self.select_mod(self.current_mod)
 
@@ -1383,9 +1412,6 @@ class DBDModLoader(_BaseClass):
             messagebox.showerror("Error", str(e))
         finally:
             self.remove_btn.configure(state="normal")
-
-
-    # ── Auto-update ──────────────────────────────────────────────────────────
 
     def _check_for_update(self):
         try:
@@ -1400,7 +1426,7 @@ class DBDModLoader(_BaseClass):
                 latest = r.read().decode("utf-8", errors="ignore").strip()
 
             latest = latest.lstrip("vV").strip()
-            local  = VERSION.lstrip("vV").strip()
+            local = VERSION.lstrip("vV").strip()
 
             if not latest:
                 return
@@ -1418,53 +1444,73 @@ class DBDModLoader(_BaseClass):
         self._update_btn.pack(side="right", padx=(0, 10), pady=3)
 
     def _do_update(self):
-        import http.client, ssl
         latest = getattr(self, "_latest_version", "?")
+
         if not messagebox.askyesno(
             "Update DBD Pak Loader",
-            f"Update from v{VERSION} → v{latest}?\n\n"
-            "The app will restart automatically after updating."
+            f"Update from v{VERSION} → v{latest}?\n\nThe app will restart automatically after updating."
         ):
             return
 
         self._update_btn.configure(text="⬇  Downloading…", state="disabled")
-        self.update_idletasks()
+        self._show_download_bar("Starting...")
 
         def _run():
             try:
-                ctx  = ssl.create_default_context()
-                for filename in _UPDATE_FILES:
+                total_files = len(_UPDATE_FILES)
+
+                for i, filename in enumerate(_UPDATE_FILES):
                     url = f"{_GITHUB_RAW}/{filename}"
+
                     req = urllib.request.Request(url, headers={"User-Agent": "DBDPakLoader/1.0"})
                     with urllib.request.urlopen(req, timeout=30) as r:
                         if r.status != 200:
                             raise RuntimeError(f"Failed downloading {filename} (HTTP {r.status})")
-                        data = r.read()
-                        dest = _SCRIPT_DIR / filename
-                        # Write to .new first, then atomic replace
-                        tmp  = dest.with_suffix(dest.suffix + ".new")
-                        tmp.write_bytes(data)
-                        tmp.replace(dest)
-                    conn.close()
 
+                        size = r.headers.get("Content-Length")
+                        size = int(size) if size and size.isdigit() else None
+
+                        dest = _SCRIPT_DIR / filename
+                        tmp = dest.with_suffix(dest.suffix + ".new")
+
+                        downloaded = 0
+                        chunk_size = 65536
+
+                        with open(tmp, "wb") as f:
+                            while True:
+                                chunk = r.read(chunk_size)
+                                if not chunk:
+                                    break
+                                f.write(chunk)
+                                downloaded += len(chunk)
+
+                                if size:
+                                    file_frac = downloaded / size
+                                else:
+                                    file_frac = 0
+
+                                overall_frac = (i + file_frac) / total_files
+                                label = f"{filename} ({i+1}/{total_files})"
+
+                                self.after(0, lambda frac=overall_frac, t=label: self._set_download_progress(frac, t))
+
+                        tmp.replace(dest)
+
+                self.after(0, self._hide_download_bar)
                 self.after(0, self._restart_after_update)
 
             except Exception as e:
+                self.after(0, self._hide_download_bar)
                 self.after(0, lambda: (
                     messagebox.showerror("Update Failed", str(e)),
-                    self._update_btn.configure(
-                        text="⬆  Update available — click to install",
-                        state="normal"
-                    )
+                    self._update_btn.configure(text="⬆  Update available — click to install", state="normal")
                 ))
 
         threading.Thread(target=_run, daemon=True).start()
 
     def _restart_after_update(self):
-        messagebox.showinfo(
-            "Update Complete",
-            "Files updated successfully!\nThe app will now restart."
-        )
+        messagebox.showinfo("Update Complete", "Files updated successfully!\nThe app will now restart.")
+
         bat = _SCRIPT_DIR / "run.bat"
         if bat.exists():
             subprocess.Popen(
@@ -1477,6 +1523,7 @@ class DBDModLoader(_BaseClass):
                 ["python", str(_SCRIPT_DIR / "loader.py")],
                 cwd=str(_SCRIPT_DIR)
             )
+
         self.destroy()
 
 
