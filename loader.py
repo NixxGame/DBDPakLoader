@@ -678,6 +678,15 @@ class DBDModLoader(_BaseClass):
             text_color=GREEN, corner_radius=6,
             command=self._do_update
         )
+        self._dl_frame = ctk.CTkFrame(bar, fg_color="transparent")
+        self._dl_label = ctk.CTkLabel(self._dl_frame, text="", font=_FONT_STATUS, text_color=TEXT_SEC)
+        self._dl_label.pack(side="left", padx=(0, 10))
+
+        self._dl_bar = ctk.CTkProgressBar(self._dl_frame, width=220, height=10, progress_color=ACCENT)
+        self._dl_bar.pack(side="left")
+        self._dl_bar.set(0)
+
+        self._dl_frame.pack_forget()
 
     def _build_sidebar(self):
         sidebar = ctk.CTkFrame(self, width=290, fg_color=BG_PANEL, corner_radius=0)
