@@ -39,11 +39,20 @@ except ImportError:
 _SCRIPT_DIR = Path(__file__).resolve().parent
 
 # ── Version ──────────────────────────────────────────────────────────────────
-VERSION         = "1.0.0"
-_GITHUB_RAW     = "https://raw.githubusercontent.com/NixxGame/DBDPakLoader/main"
-_GITHUB_VER_URL = f"{_GITHUB_RAW}/version.txt"
-_UPDATE_FILES   = ["loader.py", "requirements.txt"]
+_SCRIPT_DIR = Path(__file__).resolve().parent
 
+def _read_local_version():
+    try:
+        return (_SCRIPT_DIR / "version.txt").read_text(encoding="utf-8").strip()
+    except Exception:
+        return "0.0.0"
+
+VERSION         = _read_local_version()
+
+_GITHUB_RAW     = "https://raw.githubusercontent.com/NixxGame/DBDPakLoader/main"
+_GITHUB_VER_URL = _GITHUB_RAW + "/version.txt"
+
+_UPDATE_FILES   = ["loader.py", "requirements.txt", "version.txt"]
 
 def _format_bytes(num: int) -> str:
     if num < 1024:
