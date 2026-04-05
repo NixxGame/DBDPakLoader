@@ -1,20 +1,6 @@
 {
   "mods": [
     {
-      "id": "lightsaber-beamer",
-      "name": "Lightsaber Beamer",
-      "author": "zoe.top",
-      "description": "Replaces the Masquerade Flashlight with a glowing lightsaber effect. Compatible with all survivor skins.",
-      "image": "https://i.imgur.com/6t21Jnq.png",
-      "download_url": "https://gofile.io/d/vdyJdt",
-      "tags": ["Cosmetic", "Item", "Flashlight"],
-      "game_version": "9.5.2",
-      "added": "2026-04-04",
-      "downloads": 0,
-      "likes": 0,
-      "dislikes": 0
-    },
-    {
       "id": "template-cosmetic-1",
       "name": "Example Outfit Mod",
       "author": "YourUsername",
