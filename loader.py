@@ -144,144 +144,7 @@ def _download_gofile_to_mod(page_url, mod_name, mods_dir, progress_cb=None):
     if progress_cb:
         progress_cb(len(files), len(files), "Done")
 
-# ── Google Drive helpers ───────────────────────────────────────────────────────
-# Requires a free Google Drive API v3 key. Get one at:
-#   console.cloud.google.com → New Project → Enable "Google Drive API" → Credentials → API Key
-# Restrict the key to "Google Drive API" only. Paste it into Settings in the app.
-
-_GDRIVE_API_KEY = ""   # loaded from loader_config.json at startup
-
-def _gdrive_set_api_key(key):
-    global _GDRIVE_API_KEY
-    _GDRIVE_API_KEY = key.strip()
-
-def _gdrive_extract_folder_id(url):
-    import re
-    m = re.search(r"/folders/([a-zA-Z0-9_-]+)", url)
-    if m:
-        return m.group(1)
-    raise RuntimeError(
-        "Could not extract a folder ID from the Google Drive URL.\n"
-        "Expected format: drive.google.com/drive/folders/<ID>"
-    )
-
-def _gdrive_api_get(path):
-    """Make a GET to googleapis.com/drive/v3/<path> and return parsed JSON."""
-    if not _GDRIVE_API_KEY:
-        raise RuntimeError(
-            "No Google Drive API key configured.\n\n"
-            "To fix:\n"
-            "1. Go to console.cloud.google.com\n"
-            "2. Create a project → Enable 'Google Drive API'\n"
-            "3. Credentials → Create API Key\n"
-            "4. In the loader: Settings (⚙) → Enter GDrive API Key"
-        )
-    sep = "&" if "?" in path else "?"
-    full_path = f"/drive/v3/{path}{sep}key={_GDRIVE_API_KEY}"
-    ctx = ssl.create_default_context()
-    conn = http.client.HTTPSConnection("www.googleapis.com", timeout=20, context=ctx)
-    conn.request("GET", full_path, headers={"User-Agent": "DBDPakLoader/1.0"})
-    resp = conn.getresponse()
-    raw = resp.read()
-    conn.close()
-    data = json.loads(raw.decode())
-    if resp.status != 200:
-        err = data.get("error", {})
-        raise RuntimeError(
-            f"Drive API error {resp.status}: {err.get('message', raw[:200])}\n\n"
-            "Check your API key is valid and the Drive API is enabled."
-        )
-    return data
-
-def _gdrive_list_folder(folder_id):
-    """
-    Returns list of (file_id, filename) for mod files in the folder.
-    Uses Drive API v3 — clean JSON, no scraping.
-    """
-    MOD_EXTS = {".pak", ".sig", ".ucas", ".utoc", ".zip", ".rar", ".7z"}
-    import urllib.parse
-    q = urllib.parse.quote(f"'{folder_id}' in parents and trashed=false")
-    data = _gdrive_api_get(f"files?q={q}&fields=files(id,name)&pageSize=100")
-    files = data.get("files", [])
-    result = []
-    for f in files:
-        name = f.get("name", "")
-        ext  = os.path.splitext(name)[1].lower()
-        if ext in MOD_EXTS:
-            result.append((f["id"], name))
-    if not result:
-        raise RuntimeError(
-            "No mod files (.pak/.sig/.ucas/.utoc) found in the Google Drive folder.\n\n"
-            f"Folder ID: {folder_id}\n"
-            "Make sure the folder is shared as 'Anyone with the link can view' and "
-            "contains .pak / .sig / .ucas / .utoc files."
-        )
-    return result
-
-def _gdrive_download_file(file_id, dest_path, progress_cb=None):
-    """
-    Download a single file by ID using the Drive API v3 alt=media endpoint.
-    This is the official, stable download method — no scraping, no confirm tokens.
-    progress_cb(bytes_done, bytes_total) called during streaming.
-    """
-    if not _GDRIVE_API_KEY:
-        raise RuntimeError(
-            "No Google Drive API key configured. Open Settings (⚙) to add one."
-        )
-    import urllib.request, urllib.error, http.cookiejar
-    ctx = ssl.create_default_context()
-    url = (
-        f"https://www.googleapis.com/drive/v3/files/{file_id}"
-        f"?alt=media&key={_GDRIVE_API_KEY}"
-    )
-    req = urllib.request.Request(url, headers={"User-Agent": "DBDPakLoader/1.0"})
-    try:
-        resp = urllib.request.urlopen(req, context=ctx, timeout=120)
-    except urllib.error.HTTPError as e:
-        body = e.read(512).decode(errors="replace")
-        try:
-            msg = json.loads(body).get("error", {}).get("message", body)
-        except Exception:
-            msg = body
-        raise RuntimeError(
-            f"Drive API download failed (HTTP {e.code}): {msg}\n\n"
-            "Check:\n"
-            "  • API key is valid and Drive API is enabled\n"
-            "  • The folder/file is shared as 'Anyone with the link can view'"
-        )
-
-    total = int(resp.headers.get("Content-Length", "0") or "0")
-    done  = 0
-    with open(dest_path, "wb") as fh:
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            fh.write(chunk)
-            done += len(chunk)
-            if progress_cb:
-                progress_cb(done, total)
-    resp.close()
-
-    if done == 0:
-        raise RuntimeError(f"Downloaded 0 bytes for file ID {file_id}. The file may be empty.")
-
-def _download_gdrive_folder_to_mod(folder_url, mod_name, mods_dir, progress_cb=None):
-    """
-    Downloads all mod files from a public Google Drive folder into mods/{mod_name}/.
-    progress_cb(file_index, total_files, filename) called before each file.
-    """
-    folder_id = _gdrive_extract_folder_id(folder_url)
-    files = _gdrive_list_folder(folder_id)
-    dest  = os.path.join(mods_dir, mod_name)
-    os.makedirs(dest, exist_ok=True)
-    for i, (fid, fname) in enumerate(files):
-        if progress_cb:
-            progress_cb(i, len(files), fname)
-        _gdrive_download_file(fid, os.path.join(dest, fname))
-    if progress_cb:
-        progress_cb(len(files), len(files), "Done")
-    return dest
+# Google Drive support removed — functions and UI cleaned up.
 
 def _https_get_json(host, path, token=""):
     ctx = ssl.create_default_context()
@@ -831,9 +694,13 @@ class ModBrowserPanel(ctk.CTkFrame):
         dislikes = mod.get("dislikes", 0)
         total = likes + dislikes
         pct = (likes / total) if total > 0 else 1.0
+        has_download = bool(mod.get("download_url"))
 
-        card = ctk.CTkFrame(parent, fg_color=BG_CARD, corner_radius=10,
-                            width=self.CW, height=self.CH)
+        card_fg = BG_CARD if has_download else "#0f0f16"
+        title_color = TEXT_PRI if has_download else TEXT_MUT
+        author_color = TEXT_SEC if has_download else TEXT_MUT
+        card = ctk.CTkFrame(parent, fg_color=card_fg, corner_radius=10,
+                    width=self.CW, height=self.CH)
         card.pack(side="left", padx=6)
         card.pack_propagate(False)
 
@@ -841,20 +708,34 @@ class ModBrowserPanel(ctk.CTkFrame):
                           width=self.CW-20, height=145)
         tf.pack(padx=10, pady=(10,0))
         tf.pack_propagate(False)
-        tl = ctk.CTkLabel(tf, text="🖼", font=ctk.CTkFont(size=34), text_color=TEXT_MUT)
+        tl = ctk.CTkLabel(tf, text="🖼", font=_FT, text_color=TEXT_MUT)
         tl.place(relx=0.5, rely=0.5, anchor="center")
         img_url = mod.get("image","")
         if img_url and _HAS_PIL:
             threading.Thread(target=self._load_thumb,
                              args=(img_url, tl, self.CW-20, 145), daemon=True).start()
-
+        # Show a small installed badge over the thumbnail image
+        if already:
+            try:
+                badge = ctk.CTkLabel(tf, text="✔ Installed", font=_FSM,
+                                     fg_color=GREEN, text_color="black",
+                                     corner_radius=6)
+                badge.place(x=8, y=8)
+                # ensure badge stays above the thumbnail even after async image load
+                try:
+                    self.after(50, lambda b=badge: b.lift())
+                    self.after(300, lambda b=badge: b.lift())
+                except Exception:
+                    badge.lift()
+            except Exception:
+                pass
         ctk.CTkLabel(card, text=name,
-                     font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
-                     text_color=TEXT_PRI, anchor="w", wraplength=self.CW-20
+                     font=_FBL,
+                     text_color=title_color, anchor="w", wraplength=self.CW-20
                      ).pack(anchor="w", padx=10, pady=(8,0))
         ctk.CTkLabel(card, text=f"by {mod.get('author','unknown')}",
-                     font=ctk.CTkFont(family="Segoe UI", size=10),
-                     text_color=TEXT_SEC, anchor="w").pack(anchor="w", padx=10)
+                     font=_FB,
+                     text_color=author_color, anchor="w").pack(anchor="w", padx=10)
 
         bar_bg = ctk.CTkFrame(card, fg_color=RED, corner_radius=3, height=5)
         bar_bg.pack(fill="x", padx=10, pady=(6,0))
@@ -864,15 +745,9 @@ class ModBrowserPanel(ctk.CTkFrame):
 
         sr = ctk.CTkFrame(card, fg_color="transparent")
         sr.pack(anchor="w", padx=10, pady=(3,0))
-        ctk.CTkLabel(sr, text=f"👍 {likes:,}",
-                     font=ctk.CTkFont(family="Segoe UI", size=10),
-                     text_color=GREEN if likes>0 else TEXT_MUT).pack(side="left")
-        ctk.CTkLabel(sr, text=f"  👎 {dislikes:,}",
-                     font=ctk.CTkFont(family="Segoe UI", size=10),
-                     text_color=RED if dislikes>0 else TEXT_MUT).pack(side="left")
-        ctk.CTkLabel(sr, text=f"  ⬇ {mod.get('downloads',0):,}",
-                     font=ctk.CTkFont(family="Segoe UI", size=10),
-                     text_color=TEXT_MUT).pack(side="left")
+        # Compact stats into a single label to reduce visual clutter
+        stats_txt = f"👍 {likes:,}   👎 {dislikes:,}   ⬇ {mod.get('downloads',0):,}"
+        ctk.CTkLabel(sr, text=stats_txt, font=_FB, text_color=TEXT_MUT).pack(side="left")
 
         tags = mod.get("tags",[])
         if tags:
@@ -880,38 +755,47 @@ class ModBrowserPanel(ctk.CTkFrame):
             tr.pack(anchor="w", padx=8, pady=(4,0))
             for t in tags[:3]:
                 ctk.CTkLabel(tr, text=t,
-                             font=ctk.CTkFont(family="Segoe UI", size=9),
+                             font=_FSM,
                              fg_color="#1e1a2e", text_color=ACCENT,
                              corner_radius=4, padx=5, pady=1
                              ).pack(side="left", padx=2)
 
         ctk.CTkButton(card, text="👁  View Mod", height=30,
-                      fg_color=BG_FIELD, hover_color=BG_CARD_HOV,
-                      border_width=1, border_color=TEXT_MUT, text_color=TEXT_PRI,
-                      corner_radius=7, font=ctk.CTkFont(family="Segoe UI", size=11),
-                      command=lambda m=mod: self._show_mod_page(m)
-                      ).pack(fill="x", padx=10, pady=(8,4))
+                  fg_color=BG_FIELD, hover_color=BG_CARD_HOV,
+                  border_width=1, border_color=TEXT_MUT, text_color=TEXT_PRI,
+                  corner_radius=7, font=_FB,
+                  command=lambda m=mod: self._show_mod_page(m)
+                  ).pack(fill="x", padx=10, pady=(8,4))
 
         if busy:
             ctk.CTkLabel(card, text="⏳ Installing…",
-                         font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                         font=_FB,
                          text_color=ORANGE).pack(padx=10, anchor="w")
         elif already:
             ctk.CTkLabel(card, text="✅ Installed",
-                         font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
+                         font=_FB,
                          text_color=GREEN).pack(padx=10, anchor="w")
         else:
-            ctk.CTkButton(card, text="⬇ Install", height=30,
-                          fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black",
-                          corner_radius=7,
-                          font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-                          command=lambda m=mod: self._start_install(m)
-                          ).pack(fill="x", padx=10, pady=(0,8))
+            if has_download:
+                ctk.CTkButton(card, text="⬇ Install", height=30,
+                              fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black",
+                              corner_radius=7,
+                              font=_FB,
+                              command=lambda m=mod: self._start_install(m)
+                              ).pack(fill="x", padx=10, pady=(0,8))
+            else:
+                # Gray-out install when no download link
+                ctk.CTkButton(card, text="⬇ Install", height=30,
+                              fg_color=BG_CARD, hover_color=BG_CARD, text_color=TEXT_MUT,
+                              corner_radius=7, state="disabled", font=_FB
+                              ).pack(fill="x", padx=10, pady=(0,8))
 
         for w in [card, tf, tl]:
             w.bind("<Button-1>", lambda e, m=mod: self._show_mod_page(m))
-            w.bind("<Enter>",    lambda e, c=card: c.configure(fg_color=BG_CARD_HOV))
-            w.bind("<Leave>",    lambda e, c=card: c.configure(fg_color=BG_CARD))
+            # Only apply hover color if card has a downloadable link
+            if has_download:
+                w.bind("<Enter>",    lambda e, c=card: c.configure(fg_color=BG_CARD_HOV))
+                w.bind("<Leave>",    lambda e, c=card: c.configure(fg_color=BG_CARD))
 
     def _load_thumb(self, url, label, w, h):
         ck = f"{url}_{w}x{h}"
@@ -939,6 +823,7 @@ class ModBrowserPanel(ctk.CTkFrame):
         content_id = mod.get("content_id", "")
         already = self._is_installed(content_id, mod.get("name",""))
         busy = mid in self._installing
+        has_download = bool(mod.get("download_url"))
 
         body = ctk.CTkFrame(self._mod_page, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=28, pady=20)
@@ -1010,11 +895,18 @@ class ModBrowserPanel(ctk.CTkFrame):
                          font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
                          text_color=GREEN).pack(fill="x", pady=(18,0))
         else:
-            ctk.CTkButton(left, text="⬇ Add to My Mods", height=52,
-                          font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"),
-                          fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black",
-                          corner_radius=12, command=lambda m=mod: self._start_install(m)
-                          ).pack(fill="x", pady=(18,0))
+            if has_download:
+                ctk.CTkButton(left, text="⬇ Add to My Mods", height=52,
+                              font=_FBL,
+                              fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black",
+                              corner_radius=12, command=lambda m=mod: self._start_install(m)
+                              ).pack(fill="x", pady=(18,0))
+            else:
+                ctk.CTkButton(left, text="⬇ Add to My Mods", height=52,
+                              font=_FBL,
+                              fg_color=BG_CARD, hover_color=BG_CARD, text_color=TEXT_MUT,
+                              corner_radius=12, state="disabled"
+                              ).pack(fill="x", pady=(18,0))
 
         right = ctk.CTkScrollableFrame(body, fg_color="transparent",
                                         scrollbar_button_color=TEXT_MUT)
@@ -1034,18 +926,13 @@ class ModBrowserPanel(ctk.CTkFrame):
             tr.pack(anchor="w", pady=(0,14))
             for t in tags:
                 ctk.CTkLabel(tr, text=t,
-                             font=ctk.CTkFont(family="Segoe UI", size=10),
+                             font=_FB,
                              fg_color="#1e1a2e", text_color=ACCENT,
                              corner_radius=5, padx=8, pady=3
                              ).pack(side="left", padx=(0,4))
 
-        ctk.CTkFrame(right, height=1, fg_color=TEXT_MUT).pack(fill="x", pady=(0,14))
-
-        ctk.CTkLabel(right, text="Description",
-                     font=ctk.CTkFont(family="Segoe UI", size=11, weight="bold"),
-                     text_color=TEXT_MUT, anchor="w").pack(anchor="w", pady=(0,6))
         ctk.CTkLabel(right, text=mod.get("description","No description provided."),
-                     font=ctk.CTkFont(family="Segoe UI", size=12),
+                     font=_FB,
                      text_color=TEXT_PRI, anchor="w", justify="left", wraplength=420
                      ).pack(anchor="w", pady=(0,18))
 
@@ -1138,12 +1025,7 @@ class ModBrowserPanel(ctk.CTkFrame):
                 txt = f"⬇ Downloading ({done+1}/{total}): {fname}"
                 self.after(0, lambda t=txt: self._update_install_status(mid, t))
 
-            # Google Drive folder
-            if "drive.google.com" in url and "/folders/" in url:
-                _download_gdrive_folder_to_mod(url, mod_name, self._mods_dir, _prog)
-                self._installing.discard(mid)
-                self.after(0, lambda: self._on_install_success(mod, mod_name))
-                return
+            # (Removed Google Drive folder handling)
 
             # GoFile share link — handles folders, individual files, and zips
             if "gofile.io/d/" in url:
@@ -1242,8 +1124,7 @@ class DBDModLoader(_BaseClass):
                 self.custom_paks_path = d.get("custom_paks_path")
                 lp = d.get("last_platform")
                 if lp and lp in self.platforms: self._pending_platform = lp
-                key = d.get("gdrive_api_key", "")
-                if key: _gdrive_set_api_key(key)
+                # gdrive API key removed from config
             except Exception: pass
 
     def _save_config(self):
@@ -1252,7 +1133,6 @@ class DBDModLoader(_BaseClass):
                 "custom_game_root": self.custom_game_root,
                 "custom_paks_path": self.custom_paks_path,
                 "last_platform": self.platform_var.get(),
-                "gdrive_api_key": _GDRIVE_API_KEY,
             }, indent=4), encoding="utf-8")
         except Exception: pass
 
@@ -1360,10 +1240,7 @@ class DBDModLoader(_BaseClass):
                       fg_color=BG_FIELD, hover_color=BG_CARD, border_width=1,
                       border_color=TEXT_MUT, text_color=TEXT_PRI, corner_radius=9,
                       command=self.set_custom_game_path).pack(side="right", padx=(0,6), pady=12)
-        ctk.CTkButton(topbar, text="🔑 GDrive Key", height=34, width=120,
-                      fg_color=BG_FIELD, hover_color=BG_CARD, border_width=1,
-                      border_color=ACCENT_DIM, text_color=ACCENT, corner_radius=9,
-                      command=self.set_gdrive_api_key).pack(side="right", padx=(0,0), pady=12)
+        # Google Drive key UI removed
         bg = ctk.CTkFrame(topbar, fg_color="transparent")
         bg.pack(side="right", padx=20, pady=12)
         ctk.CTkButton(bg, text="🧹  Clean DBD", height=34, width=130, fg_color="#2e1010",
@@ -1679,28 +1556,7 @@ class DBDModLoader(_BaseClass):
             ctk.CTkLabel(row, text="→", font=_FM, text_color=ACCENT, width=22).pack(side="left", padx=(10,5), pady=7)
             ctk.CTkLabel(row, text=nn, font=_FM, text_color="#b8b8ff", anchor="w").pack(side="left", fill="x", expand=True, pady=7)
 
-    def set_gdrive_api_key(self):
-        current = _GDRIVE_API_KEY or ""
-        key = simpledialog.askstring(
-            "Google Drive API Key",
-            "Paste your Google Drive API v3 key below.\n\n"
-            "To get one (free, 2 min):\n"
-            "  1. Go to console.cloud.google.com\n"
-            "  2. New Project → Enable 'Google Drive API'\n"
-            "  3. Credentials → + Create Credentials → API Key\n"
-            "  4. (Optional) Restrict key to 'Google Drive API'\n\n"
-            "API Key:",
-            initialvalue=current,
-            parent=self,
-        )
-        if key is None:
-            return  # cancelled
-        _gdrive_set_api_key(key)
-        self._save_config()
-        if _GDRIVE_API_KEY:
-            self.status_var.set("✅ Google Drive API key saved")
-        else:
-            self.status_var.set("⚠ GDrive API key cleared")
+    
 
     def set_custom_game_path(self):
         folder = filedialog.askdirectory(title="Select Dead by Daylight Install Folder")
