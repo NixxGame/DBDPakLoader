@@ -1,15 +1,15 @@
 {
   "mods": [
     {
-      "id": "example-mod-1",
-      "name": "Example Mod",
-      "author": "YourUsername",
-      "description": "This is an example mod entry. Replace this with a real description of what the mod does.",
-      "image": "https://i.imgur.com/yourimage.png",
-      "download_url": "https://gofile.io/d/yourlink",
-      "tags": ["Cosmetic", "Survivor"],
-      "game_version": "8.x.x",
-      "added": "2025-04-01",
+      "id": "1",
+      "name": "Lightsaber Beamer",
+      "author": "zoe.top",
+      "description": "Goes over Masquerade Flashlight",
+      "image": "https://i.imgur.com/6t21Jnq.png",
+      "download_url": "https://gofile.io/d/vdyJdt",
+      "tags": ["Cosmetic", "Item"],
+      "game_version": "9.5.2",
+      "added": "2026-04-04",
       "downloads": 0,
       "likes": 0,
       "dislikes": 0
