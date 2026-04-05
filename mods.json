@@ -1,0 +1,18 @@
+{
+  "mods": [
+    {
+      "id": "example-mod-1",
+      "name": "Example Mod",
+      "author": "YourUsername",
+      "description": "This is an example mod entry. Replace this with a real description of what the mod does.",
+      "image": "https://i.imgur.com/yourimage.png",
+      "download_url": "https://gofile.io/d/yourlink",
+      "tags": ["Cosmetic", "Survivor"],
+      "game_version": "8.x.x",
+      "added": "2025-04-01",
+      "downloads": 0,
+      "likes": 0,
+      "dislikes": 0
+    }
+  ]
+}
