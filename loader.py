@@ -62,19 +62,226 @@ def _https_get_bytes(url, max_redirects=8):
         data = resp.read(); conn.close(); return data
     raise RuntimeError("Too many redirects")
 
-def _resolve_gofile_url(page_url):
-    content_id = page_url.rstrip("/").split("/")[-1]
+def _gofile_get_token():
+    """Get an anonymous GoFile token."""
     ctx = ssl.create_default_context()
-    conn = http.client.HTTPSConnection("api.gofile.io",timeout=15,context=ctx)
-    conn.request("POST","/accounts",headers={"User-Agent":"DBDPakLoader/1.0","Content-Length":"0"})
-    tdata = json.loads(conn.getresponse().read().decode()); conn.close()
-    token = tdata.get("data",{}).get("token","")
-    cdata = _https_get_json("api.gofile.io", f"/contents/{content_id}?wt=4fd6sg89d7s6&cache=true", token=token)
-    if cdata.get("status") != "ok":
-        raise RuntimeError(f"GoFile API: {cdata.get('message','unknown error')}")
-    for child in cdata["data"].get("children",{}).values():
-        if child.get("type") == "file": return child["link"]
-    raise RuntimeError("No files found in GoFile content")
+    conn = http.client.HTTPSConnection("api.gofile.io", timeout=15, context=ctx)
+    conn.request("POST", "/accounts", headers={"User-Agent": "DBDPakLoader/1.0", "Content-Length": "0"})
+    data = json.loads(conn.getresponse().read().decode())
+    conn.close()
+    if data.get("status") != "ok":
+        raise RuntimeError(f"GoFile: could not get token — {data.get('message', data)}")
+    return data["data"]["token"]
+
+def _gofile_get_content(content_id, token):
+    """Fetch GoFile content metadata for a folder or file ID."""
+    data = _https_get_json(
+        "api.gofile.io",
+        f"/contents/{content_id}?wt=4fd6sg89d7s6&cache=true",
+        token=token,
+    )
+    if data.get("status") != "ok":
+        raise RuntimeError(f"GoFile API error: {data.get('message', 'unknown')}")
+    return data["data"]
+
+def _gofile_collect_files(content, token):
+    """
+    Recursively collect all downloadable files from a GoFile content node.
+    Returns list of (filename, download_link) tuples.
+    """
+    results = []
+    node_type = content.get("type", "")
+    if node_type == "file":
+        results.append((content["name"], content["link"]))
+    elif node_type == "folder":
+        for child in content.get("children", {}).values():
+            if child.get("type") == "file":
+                results.append((child["name"], child["link"]))
+            elif child.get("type") == "folder":
+                # Recurse into sub-folders
+                sub = _gofile_get_content(child["id"], token)
+                results.extend(_gofile_collect_files(sub, token))
+    return results
+
+def _download_gofile_to_mod(page_url, mod_name, mods_dir, progress_cb=None):
+    """
+    Download all files from a GoFile share link into mods/{mod_name}/.
+    Handles both single-file and folder links.
+    If the folder contains exactly one .zip, extracts it instead.
+    progress_cb(file_index, total_files, filename) called before each file.
+    """
+    content_id = page_url.rstrip("/").split("/")[-1]
+    token = _gofile_get_token()
+    content = _gofile_get_content(content_id, token)
+    files = _gofile_collect_files(content, token)
+
+    if not files:
+        raise RuntimeError(
+            f"No files found in GoFile link: {page_url}\n"
+            "Make sure the link is correct and the content hasn't been deleted."
+        )
+
+    # If there's a single zip, use the existing zip extraction path
+    if len(files) == 1 and files[0][0].lower().endswith(".zip"):
+        fname, link = files[0]
+        if progress_cb:
+            progress_cb(0, 1, fname)
+        data = _https_get_bytes(link)
+        _import_mod_from_zip_bytes(data, mod_name, mods_dir)
+        if progress_cb:
+            progress_cb(1, 1, "Done")
+        return
+
+    # Otherwise download each file directly into the mod folder
+    dest = os.path.join(mods_dir, mod_name)
+    os.makedirs(dest, exist_ok=True)
+    for i, (fname, link) in enumerate(files):
+        if progress_cb:
+            progress_cb(i, len(files), fname)
+        data = _https_get_bytes(link)
+        with open(os.path.join(dest, fname), "wb") as fh:
+            fh.write(data)
+    if progress_cb:
+        progress_cb(len(files), len(files), "Done")
+
+# ── Google Drive helpers ───────────────────────────────────────────────────────
+# Requires a free Google Drive API v3 key. Get one at:
+#   console.cloud.google.com → New Project → Enable "Google Drive API" → Credentials → API Key
+# Restrict the key to "Google Drive API" only. Paste it into Settings in the app.
+
+_GDRIVE_API_KEY = ""   # loaded from loader_config.json at startup
+
+def _gdrive_set_api_key(key):
+    global _GDRIVE_API_KEY
+    _GDRIVE_API_KEY = key.strip()
+
+def _gdrive_extract_folder_id(url):
+    import re
+    m = re.search(r"/folders/([a-zA-Z0-9_-]+)", url)
+    if m:
+        return m.group(1)
+    raise RuntimeError(
+        "Could not extract a folder ID from the Google Drive URL.\n"
+        "Expected format: drive.google.com/drive/folders/<ID>"
+    )
+
+def _gdrive_api_get(path):
+    """Make a GET to googleapis.com/drive/v3/<path> and return parsed JSON."""
+    if not _GDRIVE_API_KEY:
+        raise RuntimeError(
+            "No Google Drive API key configured.\n\n"
+            "To fix:\n"
+            "1. Go to console.cloud.google.com\n"
+            "2. Create a project → Enable 'Google Drive API'\n"
+            "3. Credentials → Create API Key\n"
+            "4. In the loader: Settings (⚙) → Enter GDrive API Key"
+        )
+    sep = "&" if "?" in path else "?"
+    full_path = f"/drive/v3/{path}{sep}key={_GDRIVE_API_KEY}"
+    ctx = ssl.create_default_context()
+    conn = http.client.HTTPSConnection("www.googleapis.com", timeout=20, context=ctx)
+    conn.request("GET", full_path, headers={"User-Agent": "DBDPakLoader/1.0"})
+    resp = conn.getresponse()
+    raw = resp.read()
+    conn.close()
+    data = json.loads(raw.decode())
+    if resp.status != 200:
+        err = data.get("error", {})
+        raise RuntimeError(
+            f"Drive API error {resp.status}: {err.get('message', raw[:200])}\n\n"
+            "Check your API key is valid and the Drive API is enabled."
+        )
+    return data
+
+def _gdrive_list_folder(folder_id):
+    """
+    Returns list of (file_id, filename) for mod files in the folder.
+    Uses Drive API v3 — clean JSON, no scraping.
+    """
+    MOD_EXTS = {".pak", ".sig", ".ucas", ".utoc", ".zip", ".rar", ".7z"}
+    import urllib.parse
+    q = urllib.parse.quote(f"'{folder_id}' in parents and trashed=false")
+    data = _gdrive_api_get(f"files?q={q}&fields=files(id,name)&pageSize=100")
+    files = data.get("files", [])
+    result = []
+    for f in files:
+        name = f.get("name", "")
+        ext  = os.path.splitext(name)[1].lower()
+        if ext in MOD_EXTS:
+            result.append((f["id"], name))
+    if not result:
+        raise RuntimeError(
+            "No mod files (.pak/.sig/.ucas/.utoc) found in the Google Drive folder.\n\n"
+            f"Folder ID: {folder_id}\n"
+            "Make sure the folder is shared as 'Anyone with the link can view' and "
+            "contains .pak / .sig / .ucas / .utoc files."
+        )
+    return result
+
+def _gdrive_download_file(file_id, dest_path, progress_cb=None):
+    """
+    Download a single file by ID using the Drive API v3 alt=media endpoint.
+    This is the official, stable download method — no scraping, no confirm tokens.
+    progress_cb(bytes_done, bytes_total) called during streaming.
+    """
+    if not _GDRIVE_API_KEY:
+        raise RuntimeError(
+            "No Google Drive API key configured. Open Settings (⚙) to add one."
+        )
+    import urllib.request, urllib.error, http.cookiejar
+    ctx = ssl.create_default_context()
+    url = (
+        f"https://www.googleapis.com/drive/v3/files/{file_id}"
+        f"?alt=media&key={_GDRIVE_API_KEY}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "DBDPakLoader/1.0"})
+    try:
+        resp = urllib.request.urlopen(req, context=ctx, timeout=120)
+    except urllib.error.HTTPError as e:
+        body = e.read(512).decode(errors="replace")
+        try:
+            msg = json.loads(body).get("error", {}).get("message", body)
+        except Exception:
+            msg = body
+        raise RuntimeError(
+            f"Drive API download failed (HTTP {e.code}): {msg}\n\n"
+            "Check:\n"
+            "  • API key is valid and Drive API is enabled\n"
+            "  • The folder/file is shared as 'Anyone with the link can view'"
+        )
+
+    total = int(resp.headers.get("Content-Length", "0") or "0")
+    done  = 0
+    with open(dest_path, "wb") as fh:
+        while True:
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            fh.write(chunk)
+            done += len(chunk)
+            if progress_cb:
+                progress_cb(done, total)
+    resp.close()
+
+    if done == 0:
+        raise RuntimeError(f"Downloaded 0 bytes for file ID {file_id}. The file may be empty.")
+
+def _download_gdrive_folder_to_mod(folder_url, mod_name, mods_dir, progress_cb=None):
+    """
+    Downloads all mod files from a public Google Drive folder into mods/{mod_name}/.
+    progress_cb(file_index, total_files, filename) called before each file.
+    """
+    folder_id = _gdrive_extract_folder_id(folder_url)
+    files = _gdrive_list_folder(folder_id)
+    dest  = os.path.join(mods_dir, mod_name)
+    os.makedirs(dest, exist_ok=True)
+    for i, (fid, fname) in enumerate(files):
+        if progress_cb:
+            progress_cb(i, len(files), fname)
+        _gdrive_download_file(fid, os.path.join(dest, fname))
+    if progress_cb:
+        progress_cb(len(files), len(files), "Done")
+    return dest
 
 def _https_get_json(host, path, token=""):
     ctx = ssl.create_default_context()
@@ -382,8 +589,8 @@ class ShareDialog(ctk.CTkToplevel):
 
 # ── ModBrowserPanel (loads from your D1 Worker) ───────────────────────────────
 class ModBrowserPanel(ctk.CTkFrame):
-    CW = 255
-    CH = 345
+    CW = 230
+    CH = 330
 
     def __init__(self, master, mods_dir, on_install_cb, on_close_cb):
         super().__init__(master, fg_color=BG_ROOT, corner_radius=0)
@@ -402,6 +609,8 @@ class ModBrowserPanel(ctk.CTkFrame):
             self._votes = json.loads(self._votes_file.read_text(encoding="utf-8"))
         except Exception:
             pass
+        self._page = 0
+        self._page_size = 12
         self._build()
         threading.Thread(target=self._fetch_catalog, daemon=True).start()
 
@@ -470,6 +679,28 @@ class ModBrowserPanel(ctk.CTkFrame):
             self._grid_page, fg_color="transparent",
             scrollbar_button_color=TEXT_MUT, scrollbar_button_hover_color=TEXT_SEC)
 
+        # ── Pagination bar ──────────────────────────────────────────────────────
+        self._pag_bar = ctk.CTkFrame(self._grid_page, fg_color=BG_PANEL, height=46, corner_radius=0)
+        self._prev_btn = ctk.CTkButton(
+            self._pag_bar, text="◀", width=40, height=32,
+            fg_color=BG_CARD, hover_color=BG_CARD_HOV,
+            text_color=TEXT_PRI, corner_radius=8,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            command=self._prev_page)
+        self._prev_btn.pack(side="left", padx=(16,6), pady=7)
+        self._page_lbl = ctk.CTkLabel(
+            self._pag_bar, text="Page 1 of 1",
+            font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+            text_color=TEXT_PRI)
+        self._page_lbl.pack(side="left", padx=8)
+        self._next_btn = ctk.CTkButton(
+            self._pag_bar, text="▶", width=40, height=32,
+            fg_color=BG_CARD, hover_color=BG_CARD_HOV,
+            text_color=TEXT_PRI, corner_radius=8,
+            font=ctk.CTkFont(family="Segoe UI", size=13),
+            command=self._next_page)
+        self._next_btn.pack(side="left", padx=(6,0), pady=7)
+
         self._mod_page = ctk.CTkFrame(self._pages, fg_color="transparent")
 
     def _fetch_catalog(self):
@@ -496,7 +727,8 @@ class ModBrowserPanel(ctk.CTkFrame):
         self._loading_lbl.place_forget()
         self._filtered = list(self._all)
         self._apply_sort()
-        self._scroll.pack(fill="both", expand=True, padx=8, pady=8)
+        self._scroll.pack(fill="both", expand=True, padx=8, pady=(8,0))
+        self._pag_bar.pack(fill="x")
         self._render_grid()
 
     def _on_search(self, _=None):
@@ -512,6 +744,7 @@ class ModBrowserPanel(ctk.CTkFrame):
              or q in m.get("author","").lower()
              or q in " ".join(m.get("tags",[])).lower()]
             if q else list(self._all))
+        self._page = 0
         self._apply_sort()
 
     def _apply_sort(self, _=None):
@@ -523,7 +756,19 @@ class ModBrowserPanel(ctk.CTkFrame):
             "A–Z":             lambda m: m.get("name","").lower(),
         }
         self._filtered.sort(key=keys.get(mode, keys["A–Z"]), reverse=mode != "A–Z")
+        self._page = 0
         self._render_grid()
+
+    def _prev_page(self):
+        if self._page > 0:
+            self._page -= 1
+            self._render_grid()
+
+    def _next_page(self):
+        total_pages = max(1, (len(self._filtered) + self._page_size - 1) // self._page_size)
+        if self._page < total_pages - 1:
+            self._page += 1
+            self._render_grid()
 
     def _show_grid(self):
         self._mod_page.place_forget()
@@ -550,23 +795,37 @@ class ModBrowserPanel(ctk.CTkFrame):
         for w in self._scroll.winfo_children(): w.destroy()
         n = len(self._filtered)
         self._count_lbl.configure(text=f"{n} mod{'s' if n!=1 else ''}")
+
+        total_pages = max(1, (n + self._page_size - 1) // self._page_size)
+        self._page = max(0, min(self._page, total_pages - 1))
+        self._page_lbl.configure(text=f"Page {self._page+1} of {total_pages}")
+        self._prev_btn.configure(state="normal" if self._page > 0 else "disabled")
+        self._next_btn.configure(state="normal" if self._page < total_pages - 1 else "disabled")
+
         if not self._filtered:
             ctk.CTkLabel(self._scroll, text="No mods found.",
                          font=ctk.CTkFont(family="Segoe UI", size=14),
                          text_color=TEXT_SEC).pack(pady=60)
             return
-        cols = max(1, (self.winfo_width() - 32) // (self.CW + 16))
-        row = None
-        for i, mod in enumerate(self._filtered):
+
+        start = self._page * self._page_size
+        page_mods = self._filtered[start:start + self._page_size]
+
+        # Fixed 4-column layout
+        cols = 4
+        for i, mod in enumerate(page_mods):
             if i % cols == 0:
                 row = ctk.CTkFrame(self._scroll, fg_color="transparent")
-                row.pack(fill="x", pady=6, padx=6)
+                row.pack(fill="x", pady=5, padx=6)
             self._make_card(row, mod)
 
     def _make_card(self, parent, mod):
         mid = mod.get("id", mod.get("name",""))
         name = mod.get("name","Unnamed")
-        already = os.path.isdir(os.path.join(self._mods_dir, name))
+        # Installed detection: check by content_id (actual pak filename stem) if provided,
+        # otherwise fall back to folder name matching.
+        content_id = mod.get("content_id", "")
+        already = self._is_installed(content_id, name)
         busy = mid in self._installing
         likes = mod.get("likes", 0)
         dislikes = mod.get("dislikes", 0)
@@ -677,7 +936,8 @@ class ModBrowserPanel(ctk.CTkFrame):
         total = likes + dislikes
         pct = (likes / total) if total > 0 else 1.0
         vote = self._votes.get(mid)
-        already = os.path.isdir(os.path.join(self._mods_dir, mod.get("name","")))
+        content_id = mod.get("content_id", "")
+        already = self._is_installed(content_id, mod.get("name",""))
         busy = mid in self._installing
 
         body = ctk.CTkFrame(self._mod_page, fg_color="transparent")
@@ -810,11 +1070,45 @@ class ModBrowserPanel(ctk.CTkFrame):
                          text_color=TEXT_PRI, anchor="w"
                          ).pack(side="left", padx=4, pady=10)
 
+    def _is_installed(self, content_id, display_name):
+        """
+        Check if a mod is installed by scanning all mod folders for files whose
+        base name (stripped of platform suffix) matches content_id.
+        Falls back to folder-name matching if content_id is empty.
+        """
+        mods_dir = self._mods_dir
+        if not os.path.isdir(mods_dir):
+            return False
+        if content_id:
+            # content_id is the canonical pak stem, e.g. "SomeMod_P"
+            content_id_lower = content_id.lower()
+            for folder in os.listdir(mods_dir):
+                fp = os.path.join(mods_dir, folder)
+                if not os.path.isdir(fp):
+                    continue
+                try:
+                    for f in os.listdir(fp):
+                        stem = os.path.splitext(f)[0].lower()
+                        # Strip known platform suffixes before comparing
+                        for suf in ("-windows", "-egs", "-wingdk", ""):
+                            if suf and stem.endswith(suf):
+                                stem = stem[:-len(suf)]
+                        if stem == content_id_lower:
+                            return True
+                except OSError:
+                    continue
+            return False
+        # Fallback: check if a folder whose name matches display_name exists
+        return os.path.isdir(os.path.join(mods_dir, display_name))
+
     def _vote(self, mod, direction):
         mid = mod.get("id", mod.get("name",""))
-        if self._votes.get(mid) == direction:
+        current = self._votes.get(mid)
+        if current == direction:
+            # Clicking same vote again → remove vote (toggle off)
             self._votes.pop(mid, None)
         else:
+            # Switch vote or set new vote (automatically replaces opposite)
             self._votes[mid] = direction
         try:
             self._votes_file.write_text(json.dumps(self._votes), encoding="utf-8")
@@ -838,8 +1132,27 @@ class ModBrowserPanel(ctk.CTkFrame):
     def _install_worker(self, mod, url, mod_name):
         mid = mod.get("id", mod.get("name",""))
         try:
+            def _prog(done, total, fname):
+                if fname == "Done":
+                    return
+                txt = f"⬇ Downloading ({done+1}/{total}): {fname}"
+                self.after(0, lambda t=txt: self._update_install_status(mid, t))
+
+            # Google Drive folder
+            if "drive.google.com" in url and "/folders/" in url:
+                _download_gdrive_folder_to_mod(url, mod_name, self._mods_dir, _prog)
+                self._installing.discard(mid)
+                self.after(0, lambda: self._on_install_success(mod, mod_name))
+                return
+
+            # GoFile share link — handles folders, individual files, and zips
             if "gofile.io/d/" in url:
-                url = _resolve_gofile_url(url)
+                _download_gofile_to_mod(url, mod_name, self._mods_dir, _prog)
+                self._installing.discard(mid)
+                self.after(0, lambda: self._on_install_success(mod, mod_name))
+                return
+
+            # Plain direct URL (zip or other archive)
             data = _https_get_bytes(url)
             _import_mod_from_zip_bytes(data, mod_name, self._mods_dir)
             self._installing.discard(mid)
@@ -849,6 +1162,24 @@ class ModBrowserPanel(ctk.CTkFrame):
             self._installing.discard(mid)
             self.after(0, lambda: messagebox.showerror("Install Failed", err, parent=self))
             self.after(0, self._render_grid)
+
+    def _update_install_status(self, mid, text):
+        """Update the installing label on the mod detail page if it's currently shown."""
+        if (self._current_mod and
+                self._current_mod.get("id", self._current_mod.get("name")) == mid):
+            # Rebuild the page so the busy label reflects the new text — lightweight
+            # alternative: just find and reconfigure the label if it exists
+            for w in self._mod_page.winfo_children():
+                self._find_and_update_label(w, "⏳ Installing…", text)
+
+    def _find_and_update_label(self, widget, old_text, new_text):
+        try:
+            if hasattr(widget, "cget") and widget.cget("text") == old_text:
+                widget.configure(text=new_text)
+        except Exception:
+            pass
+        for child in widget.winfo_children():
+            self._find_and_update_label(child, old_text, new_text)
 
     def _on_install_success(self, mod, mod_name):
         self._on_install(mod_name)
@@ -911,6 +1242,8 @@ class DBDModLoader(_BaseClass):
                 self.custom_paks_path = d.get("custom_paks_path")
                 lp = d.get("last_platform")
                 if lp and lp in self.platforms: self._pending_platform = lp
+                key = d.get("gdrive_api_key", "")
+                if key: _gdrive_set_api_key(key)
             except Exception: pass
 
     def _save_config(self):
@@ -918,7 +1251,9 @@ class DBDModLoader(_BaseClass):
             self.config_file.write_text(json.dumps({
                 "custom_game_root": self.custom_game_root,
                 "custom_paks_path": self.custom_paks_path,
-                "last_platform": self.platform_var.get()}, indent=4), encoding="utf-8")
+                "last_platform": self.platform_var.get(),
+                "gdrive_api_key": _GDRIVE_API_KEY,
+            }, indent=4), encoding="utf-8")
         except Exception: pass
 
     def _attempt_auto_detect(self):
@@ -1024,7 +1359,11 @@ class DBDModLoader(_BaseClass):
         ctk.CTkButton(topbar, text="⚙ Set Custom Path", height=34, width=150,
                       fg_color=BG_FIELD, hover_color=BG_CARD, border_width=1,
                       border_color=TEXT_MUT, text_color=TEXT_PRI, corner_radius=9,
-                      command=self.set_custom_game_path).pack(side="right", padx=(0,12), pady=12)
+                      command=self.set_custom_game_path).pack(side="right", padx=(0,6), pady=12)
+        ctk.CTkButton(topbar, text="🔑 GDrive Key", height=34, width=120,
+                      fg_color=BG_FIELD, hover_color=BG_CARD, border_width=1,
+                      border_color=ACCENT_DIM, text_color=ACCENT, corner_radius=9,
+                      command=self.set_gdrive_api_key).pack(side="right", padx=(0,0), pady=12)
         bg = ctk.CTkFrame(topbar, fg_color="transparent")
         bg.pack(side="right", padx=20, pady=12)
         ctk.CTkButton(bg, text="🧹  Clean DBD", height=34, width=130, fg_color="#2e1010",
@@ -1339,6 +1678,29 @@ class DBDModLoader(_BaseClass):
             row.pack(fill="x", padx=4, pady=2)
             ctk.CTkLabel(row, text="→", font=_FM, text_color=ACCENT, width=22).pack(side="left", padx=(10,5), pady=7)
             ctk.CTkLabel(row, text=nn, font=_FM, text_color="#b8b8ff", anchor="w").pack(side="left", fill="x", expand=True, pady=7)
+
+    def set_gdrive_api_key(self):
+        current = _GDRIVE_API_KEY or ""
+        key = simpledialog.askstring(
+            "Google Drive API Key",
+            "Paste your Google Drive API v3 key below.\n\n"
+            "To get one (free, 2 min):\n"
+            "  1. Go to console.cloud.google.com\n"
+            "  2. New Project → Enable 'Google Drive API'\n"
+            "  3. Credentials → + Create Credentials → API Key\n"
+            "  4. (Optional) Restrict key to 'Google Drive API'\n\n"
+            "API Key:",
+            initialvalue=current,
+            parent=self,
+        )
+        if key is None:
+            return  # cancelled
+        _gdrive_set_api_key(key)
+        self._save_config()
+        if _GDRIVE_API_KEY:
+            self.status_var.set("✅ Google Drive API key saved")
+        else:
+            self.status_var.set("⚠ GDrive API key cleared")
 
     def set_custom_game_path(self):
         folder = filedialog.askdirectory(title="Select Dead by Daylight Install Folder")
