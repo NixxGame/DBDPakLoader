@@ -51,7 +51,11 @@ def _get_hwid():
             return hashlib.sha256(guid.encode()).hexdigest()[:32]
         except Exception:
             pass
-    hwid_file = _SCRIPT_DIR / "hwid.txt"
+    hwid_file = Path(r"C:\pakConfig") / "hwid.txt"
+    try:
+        hwid_file.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
     if hwid_file.exists():
         return hwid_file.read_text().strip()
     import uuid
@@ -1166,9 +1170,9 @@ class DBDModLoader(_BaseClass):
         self.minsize(1100,600)
         self.configure(bg=BG_ROOT)
 
-        drive = os.path.splitdrive(os.getcwd())[0] + "\\"
-        self.mods_dir = os.path.join(drive, "mods")
-        self.config_file = _SCRIPT_DIR / "loader_config.json"
+        _PAK_CONFIG = Path(r"C:\pakConfig")
+        self.mods_dir    = str(_PAK_CONFIG / "mods")
+        self.config_file = _PAK_CONFIG / "loader_config.json"
         self.custom_game_root = None
         self.custom_paks_path = None
         self.platforms = {
@@ -1186,7 +1190,11 @@ class DBDModLoader(_BaseClass):
         self._search_after_id = None
         self._latest_version = None
 
-        os.makedirs(self.mods_dir, exist_ok=True)
+        try:
+            _PAK_CONFIG.mkdir(parents=True, exist_ok=True)
+            (_PAK_CONFIG / "mods").mkdir(exist_ok=True)
+        except Exception:
+            pass
         self._load_config()
         self._build_ui()
         self.load_mods()
