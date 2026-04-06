@@ -1195,6 +1195,27 @@ class DBDModLoader(_BaseClass):
             (_PAK_CONFIG / "mods").mkdir(exist_ok=True)
         except Exception:
             pass
+        # ── Migrate old C:\mods folder if it exists ───────────────────────────
+        _OLD_MODS = Path(r"C:\mods")
+        _NEW_MODS = _PAK_CONFIG / "mods"
+        if _OLD_MODS.exists() and _OLD_MODS.is_dir():
+            try:
+                for item in _OLD_MODS.iterdir():
+                    if item.is_dir():
+                        dest = _NEW_MODS / item.name
+                        if not dest.exists():
+                            shutil.move(str(item), str(dest))
+                        else:
+                            # merge: move files that don't already exist
+                            for f in item.iterdir():
+                                if f.is_file() and not (dest / f.name).exists():
+                                    shutil.move(str(f), str(dest / f.name))
+                # Remove old folder only if now empty
+                remaining = list(_OLD_MODS.iterdir())
+                if not remaining:
+                    _OLD_MODS.rmdir()
+            except Exception:
+                pass
         self._load_config()
         self._build_ui()
         self.load_mods()
