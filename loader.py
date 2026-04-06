@@ -1165,7 +1165,7 @@ class DBDModLoader(_BaseClass):
     def __init__(self):
         super().__init__()
         _init_fonts()                     # ← Fixed: fonts now created after root window
-        self.title("DBD Pak Loader")
+        self.title("PAK Loader")
         self.geometry("1320x800")
         self.minsize(1100,600)
         self.configure(bg=BG_ROOT)
@@ -1305,9 +1305,9 @@ class DBDModLoader(_BaseClass):
         sb.pack(side="left", fill="y")
         sb.pack_propagate(False)
         logo = ctk.CTkFrame(sb, fg_color="transparent")
-        logo.pack(fill="x", padx=20, pady=(20,0))
-        ctk.CTkLabel(logo, text="DBD", font=_FL, text_color=ACCENT).pack(side="left")
-        ctk.CTkLabel(logo, text=" Pak Loader", font=_FLS, text_color=TEXT_PRI).pack(side="left", pady=(1,0))
+        logo.pack(fill="x", padx=40, pady=(20,0))
+        ctk.CTkLabel(logo, text="PAK", font=_FL, text_color=ACCENT).pack(side="left")
+        ctk.CTkLabel(logo, text=" Loader", font=_FLS, text_color=TEXT_PRI).pack(side="left", pady=(1,0))
         ctk.CTkFrame(sb, height=1, fg_color=TEXT_MUT).pack(fill="x", padx=16, pady=(12,0))
         ctk.CTkLabel(sb, text="MODS", font=_FSM, text_color=TEXT_MUT).pack(anchor="w", padx=20, pady=(10,3))
         self.search_var = ctk.StringVar()
@@ -1867,7 +1867,7 @@ class DBDModLoader(_BaseClass):
         self._update_btn.pack(side="right", padx=(0,10), pady=3)
 
     def _do_update(self):
-        if not messagebox.askyesno("Update DBD Pak Loader",
+        if not messagebox.askyesno("Update PAK Loader",
                 f"Update from v{VERSION} → v{self._latest_version}?\n\n"
                 "The app will restart automatically after updating."):
             return
