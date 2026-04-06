@@ -384,6 +384,217 @@ class ModCard(ctk.CTkFrame):
 
     def set_installed(self,v): self._dot.configure(text_color=GREEN if v else TEXT_MUT)
 
+# ── PathEditorPanel ───────────────────────────────────────────────────────────
+class PathEditorPanel(ctk.CTkFrame):
+    """
+    Full-area inline panel (same style as ModBrowserPanel).
+    Replaces the main content area when "Path Editor" is clicked.
+    """
+    _SUFFIXES = ["-Windows", "-EGS", "-WinGDK"]
+
+    def __init__(self, master, custom_paths, builtin_platforms, on_save, on_close):
+        super().__init__(master, fg_color=BG_ROOT, corner_radius=0)
+        self._paths      = [dict(p) for p in custom_paths]
+        self._builtins   = builtin_platforms
+        self._on_save    = on_save
+        self._on_close   = on_close
+        self._rows       = []
+        self._build()
+        self._render_rows()
+
+    # ── layout ────────────────────────────────────────────────────────────────
+    def _build(self):
+        # Top bar (mirrors ModBrowserPanel style)
+        top = ctk.CTkFrame(self, fg_color=BG_PANEL, height=52, corner_radius=0)
+        top.pack(fill="x")
+        top.pack_propagate(False)
+
+        ctk.CTkLabel(top, text="⚙  Path Editor",
+                     font=ctk.CTkFont(family="Segoe UI Black", size=16, weight="bold"),
+                     text_color=ACCENT).pack(side="left", padx=16, pady=10)
+
+        ctk.CTkButton(top, text="✕  Close", width=100, height=34,
+                      fg_color=BG_CARD, hover_color="#3a1a1a",
+                      border_width=1, border_color=RED, text_color=RED,
+                      corner_radius=8, font=ctk.CTkFont(family="Segoe UI", size=12),
+                      command=self._close).pack(side="right", padx=12, pady=10)
+
+        ctk.CTkButton(top, text="💾  Save", width=90, height=34,
+                      fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black",
+                      corner_radius=8, font=ctk.CTkFont(family="Segoe UI", size=12,
+                      weight="bold"), command=self._save).pack(side="right", padx=(0,6), pady=10)
+
+        ctk.CTkButton(top, text="＋  Add Path", width=110, height=34,
+                      fg_color=BG_CARD, hover_color=BG_CARD_HOV,
+                      border_width=1, border_color=ACCENT_DIM, text_color=ACCENT,
+                      corner_radius=8, font=ctk.CTkFont(family="Segoe UI", size=12),
+                      command=self._add_row).pack(side="right", padx=(0,6), pady=10)
+
+        # Column header strip
+        ch = ctk.CTkFrame(self, fg_color=BG_PANEL, height=32, corner_radius=0)
+        ch.pack(fill="x")
+        ch.pack_propagate(False)
+        ctk.CTkLabel(ch, text="", width=44).pack(side="left", padx=(16,0))
+        ctk.CTkLabel(ch, text="NAME", font=_FSM, text_color=TEXT_MUT,
+                     width=180, anchor="w").pack(side="left", padx=(0,8))
+        ctk.CTkLabel(ch, text="PAKS PATH", font=_FSM, text_color=TEXT_MUT,
+                     anchor="w").pack(side="left", fill="x", expand=True, padx=(0,8))
+        ctk.CTkLabel(ch, text="SUFFIX", font=_FSM, text_color=TEXT_MUT,
+                     width=130, anchor="w").pack(side="left", padx=(0,8))
+        ctk.CTkLabel(ch, text="", width=36).pack(side="left", padx=(0,16))
+
+        # Built-in read-only section
+        ctk.CTkLabel(self, text="BUILT-IN PLATFORMS", font=_FSM,
+                     text_color=TEXT_MUT).pack(anchor="w", padx=24, pady=(14, 4))
+        for name, entry in self._builtins.items():
+            self._make_builtin_row(name, entry)
+
+        ctk.CTkFrame(self, height=1, fg_color=TEXT_MUT).pack(fill="x", padx=20, pady=(12,0))
+        ctk.CTkLabel(self, text="CUSTOM PATHS", font=_FSM,
+                     text_color=TEXT_MUT).pack(anchor="w", padx=24, pady=(10, 4))
+
+        # Scrollable custom rows
+        self._scroll = ctk.CTkScrollableFrame(self, fg_color="transparent",
+                                               scrollbar_button_color=TEXT_MUT,
+                                               scrollbar_button_hover_color=TEXT_SEC)
+        self._scroll.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+    def _make_builtin_row(self, name, entry):
+        row = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=7, height=38)
+        row.pack(fill="x", padx=20, pady=2)
+        row.pack_propagate(False)
+        # lock icon instead of pencil
+        ctk.CTkLabel(row, text="🔒", width=28, font=_FP,
+                     text_color=TEXT_MUT).pack(side="left", padx=(10, 4))
+        ctk.CTkLabel(row, text=name, font=_FB, text_color=TEXT_SEC,
+                     width=180, anchor="w").pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(row, text=entry.get("path", ""), font=_FB,
+                     text_color=TEXT_MUT, anchor="w").pack(side="left", fill="x",
+                     expand=True, padx=(0, 8))
+        ctk.CTkLabel(row, text=entry.get("suffix", ""), font=_FB,
+                     text_color=TEXT_MUT, width=130, anchor="w").pack(side="left", padx=(0, 8))
+
+    # ── custom row rendering ──────────────────────────────────────────────────
+    def _render_rows(self):
+        for w in self._scroll.winfo_children():
+            w.destroy()
+        self._rows.clear()
+        for i, entry in enumerate(self._paths):
+            self._add_row_widget(i, entry)
+
+    def _add_row_widget(self, i, entry):
+        bg = BG_CARD if i % 2 == 0 else BG_FIELD
+        row_frame = ctk.CTkFrame(self._scroll, fg_color=bg, corner_radius=7, height=42)
+        row_frame.pack(fill="x", pady=3)
+        row_frame.pack_propagate(False)
+
+        # Pencil toggle
+        edit_btn = ctk.CTkButton(row_frame, text="✏", width=28, height=28,
+                                  fg_color="transparent", hover_color="#2a2040",
+                                  text_color=ACCENT, font=_FP, corner_radius=4,
+                                  command=lambda idx=i: self._toggle_edit(idx))
+        edit_btn.pack(side="left", padx=(10, 4))
+
+        name_var = ctk.StringVar(value=entry.get("name", ""))
+        name_ent = ctk.CTkEntry(row_frame, textvariable=name_var, width=180, height=30,
+                                 fg_color=BG_FIELD, text_color=TEXT_PRI,
+                                 border_color=TEXT_MUT, corner_radius=6, font=_FB,
+                                 state="disabled")
+        name_ent.pack(side="left", padx=(0, 8))
+
+        path_var = ctk.StringVar(value=entry.get("path", ""))
+        path_ent = ctk.CTkEntry(row_frame, textvariable=path_var, height=30,
+                                 fg_color=BG_FIELD, text_color=TEXT_PRI,
+                                 border_color=TEXT_MUT, corner_radius=6, font=_FB,
+                                 state="disabled")
+        path_ent.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        browse_btn = ctk.CTkButton(row_frame, text="📂", width=30, height=30,
+                                    fg_color="transparent", hover_color=BG_CARD_HOV,
+                                    text_color=TEXT_MUT, font=_FP, corner_radius=4,
+                                    state="disabled",
+                                    command=lambda pv=path_var: self._browse(pv))
+        browse_btn.pack(side="left", padx=(0, 8))
+
+        suf_var = ctk.StringVar(value=entry.get("suffix", "-Windows"))
+        suf_menu = ctk.CTkOptionMenu(row_frame, values=self._SUFFIXES,
+                                      variable=suf_var, width=130, height=30,
+                                      fg_color=BG_FIELD, button_color=ACCENT_DIM,
+                                      button_hover_color=ACCENT,
+                                      dropdown_fg_color=BG_CARD,
+                                      dropdown_hover_color=BG_CARD_HOV,
+                                      font=_FB, text_color=TEXT_PRI, corner_radius=6,
+                                      state="disabled")
+        suf_menu.pack(side="left", padx=(0, 8))
+
+        del_btn = ctk.CTkButton(row_frame, text="🗑", width=28, height=28,
+                                 fg_color="transparent", hover_color="#3a1a1a",
+                                 text_color=RED, font=_FP, corner_radius=4,
+                                 command=lambda idx=i: self._delete_row(idx))
+        del_btn.pack(side="left", padx=(0, 10))
+
+        self._rows.append({
+            "frame": row_frame, "edit_btn": edit_btn,
+            "name_var": name_var, "name_ent": name_ent,
+            "path_var": path_var, "path_ent": path_ent,
+            "browse_btn": browse_btn,
+            "suf_var": suf_var, "suf_menu": suf_menu,
+        })
+
+    # ── row actions ───────────────────────────────────────────────────────────
+    def _toggle_edit(self, idx):
+        if idx >= len(self._rows): return
+        row = self._rows[idx]
+        editing = row["name_ent"].cget("state") == "disabled"
+        state = "normal" if editing else "disabled"
+        row["name_ent"].configure(state=state)
+        row["path_ent"].configure(state=state)
+        row["browse_btn"].configure(state=state)
+        row["suf_menu"].configure(state=state)
+        row["edit_btn"].configure(
+            text_color=ORANGE if editing else ACCENT,
+            fg_color="#1a1020" if editing else "transparent")
+        if not editing:      # committed — flush to data
+            self._flush(idx)
+
+    def _flush(self, idx):
+        if idx >= len(self._rows) or idx >= len(self._paths): return
+        r = self._rows[idx]
+        self._paths[idx] = {
+            "name":   r["name_var"].get().strip() or f"Path {idx+1}",
+            "path":   r["path_var"].get().strip(),
+            "suffix": r["suf_var"].get(),
+        }
+
+    def _flush_all(self):
+        for i in range(len(self._rows)):
+            self._flush(i)
+
+    def _add_row(self):
+        self._paths.append({"name": "New Path", "path": "", "suffix": "-Windows"})
+        self._render_rows()
+        self._toggle_edit(len(self._paths) - 1)
+
+    def _delete_row(self, idx):
+        if idx >= len(self._paths): return
+        del self._paths[idx]
+        self._render_rows()
+
+    def _browse(self, path_var):
+        folder = filedialog.askdirectory(title="Select Paks Folder")
+        if folder:
+            path_var.set(folder)
+
+    def _save(self):
+        self._flush_all()
+        clean = [p for p in self._paths
+                 if p.get("name","").strip() and p.get("path","").strip()]
+        self._on_save(clean)
+
+    def _close(self):
+        self._on_close()
+
+
 # ── ShareDialog ───────────────────────────────────────────────────────────────
 class ShareDialog(ctk.CTkToplevel):
     def __init__(self,master,mod_name,mod_path):
@@ -1175,12 +1386,13 @@ class DBDModLoader(_BaseClass):
         self.config_file = _PAK_CONFIG / "loader_config.json"
         self.custom_game_root = None
         self.custom_paks_path = None
-        self.platforms = {
-            "Steam (-Windows)": {"suffix": "-Windows", "path": r"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks"},
-            "Epic Games (-EGS)": {"suffix": "-EGS", "path": r"C:\Program Files\Epic Games\DeadByDaylight\DeadByDaylight\Content\Paks"},
-            "Microsoft Store (-WinGDK)": {"suffix": "-WinGDK", "path": r"C:\XboxGames\Dead by Daylight\Content\DeadByDaylight\Content\Paks"},
-            "Custom Path": {"suffix": "", "path": ""},
+        self.custom_paths = []   # list of {name, path, suffix}
+        self._builtin_platforms = {
+            "Steam (-Windows)":         {"suffix": "-Windows", "path": r"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks"},
+            "Epic Games (-EGS)":        {"suffix": "-EGS",     "path": r"C:\Program Files\Epic Games\DeadByDaylight\DeadByDaylight\Content\Paks"},
+            "Microsoft Store (-WinGDK)":{"suffix": "-WinGDK",  "path": r"C:\XboxGames\Dead by Daylight\Content\DeadByDaylight\Content\Paks"},
         }
+        self.platforms = dict(self._builtin_platforms)
         self.current_mod = None
         self.current_mod_path = None
         self._card_map = {}
@@ -1271,25 +1483,53 @@ class DBDModLoader(_BaseClass):
                 d = json.loads(self.config_file.read_text(encoding="utf-8"))
                 self.custom_game_root = d.get("custom_game_root")
                 self.custom_paks_path = d.get("custom_paks_path")
+                self.custom_paths     = d.get("custom_paths", [])
+                self._rebuild_platforms()
                 lp = d.get("last_platform")
                 if lp and lp in self.platforms: self._pending_platform = lp
-                # gdrive API key removed from config
             except Exception: pass
+
+    def _rebuild_platforms(self):
+        """Rebuild self.platforms from builtins + custom_paths."""
+        self.platforms = dict(self._builtin_platforms)
+        for cp in self.custom_paths:
+            name = cp.get("name", "").strip()
+            if name:
+                self.platforms[name] = {"suffix": cp.get("suffix", ""), "path": cp.get("path", "")}
+        if hasattr(self, "_platform_menu"):
+            self._platform_menu.configure(values=list(self.platforms.keys()))
+            if self.platform_var.get() not in self.platforms:
+                self.platform_var.set(list(self.platforms.keys())[0])
+            self._invalidate_paks_cache()
 
     def _save_config(self):
         try:
             self.config_file.write_text(json.dumps({
                 "custom_game_root": self.custom_game_root,
                 "custom_paks_path": self.custom_paks_path,
-                "last_platform": self.platform_var.get(),
+                "custom_paths":     self.custom_paths,
+                "last_platform":    self.platform_var.get(),
             }, indent=4), encoding="utf-8")
         except Exception: pass
 
     def _attempt_auto_detect(self):
         p, msg = _auto_detect_dbd_paks_path()
         if p:
-            self.custom_paks_path = p
-            self.platforms["Custom Path"]["path"] = p
+            for name, entry in self._builtin_platforms.items():
+                if Path(entry["path"]) == Path(p):
+                    self.platform_var.set(name)
+                    self._invalidate_paks_cache()
+                    self.status_var.set(f"✅ {msg}")
+                    return
+            existing = next((i for i, cp in enumerate(self.custom_paths)
+                             if cp.get("name") == "Auto-detected"), None)
+            entry = {"name": "Auto-detected", "path": p, "suffix": "-Windows"}
+            if existing is not None:
+                self.custom_paths[existing] = entry
+            else:
+                self.custom_paths.append(entry)
+            self._rebuild_platforms()
+            self.platform_var.set("Auto-detected")
             self._invalidate_paks_cache()
             self._save_config()
             self.status_var.set(f"✅ {msg}")
@@ -1303,9 +1543,9 @@ class DBDModLoader(_BaseClass):
 
     def get_active_paks_path(self):
         if self._paks_cache_valid: return self._paks_cache
-        plat = self.platform_var.get()
-        p = (Path(self.custom_paks_path) if self.custom_paks_path else None
-             if plat == "Custom Path" else Path(self.platforms[plat]["path"]))
+        plat  = self.platform_var.get()
+        raw   = self.platforms.get(plat, {}).get("path", "")
+        p     = Path(raw) if raw else None
         result = p if (p and p.exists()) else None
         self._paks_cache = result
         self._paks_cache_valid = True
@@ -1314,9 +1554,8 @@ class DBDModLoader(_BaseClass):
     def get_active_suffix(self):
         if self._suffix_cache is not None: return self._suffix_cache
         plat = self.platform_var.get()
-        s = "" if plat == "Custom Path" else self.platforms[plat]["suffix"]
-        self._suffix_cache = s
-        return s
+        self._suffix_cache = self.platforms.get(plat, {}).get("suffix", "")
+        return self._suffix_cache
 
     def _build_ui(self):
         self._build_statusbar()
@@ -1380,15 +1619,17 @@ class DBDModLoader(_BaseClass):
         ctk.CTkLabel(pf, text="PLATFORM", font=_FSM, text_color=TEXT_MUT).pack(anchor="w")
         dp = self._pending_platform or "Microsoft Store (-WinGDK)"
         self.platform_var = ctk.StringVar(value=dp)
-        ctk.CTkOptionMenu(pf, values=list(self.platforms.keys()), variable=self.platform_var,
+        self._platform_menu = ctk.CTkOptionMenu(
+                          pf, values=list(self.platforms.keys()), variable=self.platform_var,
                           command=self.on_platform_change, width=290, height=30,
                           fg_color=BG_FIELD, button_color=ACCENT_DIM, button_hover_color=ACCENT,
                           dropdown_fg_color=BG_CARD, dropdown_hover_color=BG_CARD_HOV,
-                          font=_FBM, text_color=TEXT_PRI, corner_radius=7).pack(anchor="w")
-        ctk.CTkButton(topbar, text="⚙ Set Custom Path", height=34, width=150,
+                          font=_FBM, text_color=TEXT_PRI, corner_radius=7)
+        self._platform_menu.pack(anchor="w")
+        ctk.CTkButton(topbar, text="⚙  Path Editor", height=34, width=130,
                       fg_color=BG_FIELD, hover_color=BG_CARD, border_width=1,
-                      border_color=TEXT_MUT, text_color=TEXT_PRI, corner_radius=9,
-                      command=self.set_custom_game_path).pack(side="right", padx=(0,6), pady=12)
+                      border_color=ACCENT_DIM, text_color=ACCENT, corner_radius=9,
+                      command=self.open_path_editor).pack(side="right", padx=(0,6), pady=12)
         # Google Drive key UI removed
         bg = ctk.CTkFrame(topbar, fg_color="transparent")
         bg.pack(side="right", padx=20, pady=12)
@@ -1707,22 +1948,38 @@ class DBDModLoader(_BaseClass):
 
     
 
-    def set_custom_game_path(self):
-        folder = filedialog.askdirectory(title="Select Dead by Daylight Install Folder")
-        if not folder: return
-        paks = _find_paks_from_game_root(Path(folder))
-        if not paks:
-            messagebox.showerror("Invalid Folder", "Could not locate Content\\Paks inside that folder.")
+    def open_path_editor(self):
+        if hasattr(self, "_path_panel") and self._path_panel.winfo_exists():
             return
-        self.custom_game_root = folder
-        self.custom_paks_path = str(paks)
-        self.platforms["Custom Path"]["path"] = str(paks)
-        self.platform_var.set("Custom Path")
-        self._invalidate_paks_cache()
+        self.empty_frame.place_forget()
+        self.detail_frame.place_forget()
+        if hasattr(self, "_browser_panel") and self._browser_panel.winfo_exists():
+            self._browser_panel.place_forget()
+        self._path_panel = PathEditorPanel(
+            self._content,
+            custom_paths=self.custom_paths,
+            builtin_platforms=self._builtin_platforms,
+            on_save=self._on_paths_saved,
+            on_close=self._close_path_editor,
+        )
+        self._path_panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+
+    def _close_path_editor(self):
+        if hasattr(self, "_path_panel") and self._path_panel.winfo_exists():
+            self._path_panel.destroy()
+        if self.current_mod and os.path.isdir(os.path.join(self.mods_dir, self.current_mod)):
+            self.select_mod(self.current_mod)
+        else:
+            self.empty_frame.place(relx=0.5, rely=0.5, anchor="center")
+
+    def _on_paths_saved(self, new_paths):
+        self.custom_paths = new_paths
+        self._rebuild_platforms()
         self._save_config()
-        self.status_var.set(f"Custom path set: {paks}")
+        self._close_path_editor()
         self.load_mods()
         if self.current_mod: self.select_mod(self.current_mod)
+        self.status_var.set(f"Paths saved  ({len(new_paths)} custom)")
 
     def clean_paks_folder(self):
         paks = self.get_active_paks_path()
