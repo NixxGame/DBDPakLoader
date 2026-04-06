@@ -35,6 +35,35 @@ def _read_local_version():
 
 VERSION = _read_local_version().lstrip("vV").strip()
 
+# ── Hardware ID ───────────────────────────────────────────────────────────────
+def _get_hwid():
+    """
+    Returns a stable anonymous machine ID.
+    Uses the Windows MachineGuid registry key, falls back to a UUID
+    stored in hwid.txt next to loader.py.
+    """
+    import hashlib
+    if _HAS_WINREG:
+        try:
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                 r"SOFTWARE\Microsoft\Cryptography")
+            guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+            return hashlib.sha256(guid.encode()).hexdigest()[:32]
+        except Exception:
+            pass
+    hwid_file = _SCRIPT_DIR / "hwid.txt"
+    if hwid_file.exists():
+        return hwid_file.read_text().strip()
+    import uuid
+    new_id = uuid.uuid4().hex
+    try:
+        hwid_file.write_text(new_id)
+    except Exception:
+        pass
+    return new_id
+
+_HWID = _get_hwid()
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _format_bytes(n: int) -> str:
@@ -152,6 +181,23 @@ def _https_get_json(host, path, token=""):
     hdrs = {"User-Agent": "DBDPakLoader/1.0"}
     if token: hdrs["Authorization"] = f"Bearer {token}"
     conn.request("GET", path, headers=hdrs)
+    resp = conn.getresponse()
+    data = json.loads(resp.read().decode())
+    conn.close()
+    return data
+
+_WORKER_HOST = "pakmods.lizzy032408.workers.dev"
+
+def _worker_post(path, payload):
+    """POST JSON to the Cloudflare Worker and return parsed response. Fire-and-forget safe."""
+    body = json.dumps(payload).encode()
+    ctx  = ssl.create_default_context()
+    conn = http.client.HTTPSConnection(_WORKER_HOST, timeout=10, context=ctx)
+    conn.request("POST", path, body=body, headers={
+        "User-Agent":   "DBDPakLoader/1.0",
+        "Content-Type": "application/json",
+        "Content-Length": str(len(body)),
+    })
     resp = conn.getresponse()
     data = json.loads(resp.read().decode())
     conn.close()
@@ -466,12 +512,6 @@ class ModBrowserPanel(ctk.CTkFrame):
         self._installing = set()
         self._search_id = None
         self._current_mod = None
-        self._votes_file = Path(mods_dir).parent / "browser_votes.json"
-        self._votes = {}
-        try:
-            self._votes = json.loads(self._votes_file.read_text(encoding="utf-8"))
-        except Exception:
-            pass
         self._page = 0
         self._page_size = 12
         self._build()
@@ -568,22 +608,20 @@ class ModBrowserPanel(ctk.CTkFrame):
 
     def _fetch_catalog(self):
         try:
-            conn = http.client.HTTPSConnection("pakmods.lizzy032408.workers.dev", timeout=20)
-            conn.request("GET", "/mods", headers={"User-Agent": "DBDPakLoader/1.0"})
+            ctx  = ssl.create_default_context()
+            conn = http.client.HTTPSConnection(_WORKER_HOST, timeout=20, context=ctx)
+            conn.request("GET", f"/mods?hwid={_HWID}",
+                         headers={"User-Agent": "DBDPakLoader/1.0"})
             resp = conn.getresponse()
-
             if resp.status != 200:
                 raise RuntimeError(f"Worker returned HTTP {resp.status}")
-
             data = json.loads(resp.read().decode())
             conn.close()
-
             self._all = data.get("mods", data) if isinstance(data, dict) else data
             self.after(0, self._catalog_ready)
-
         except Exception as e:
             self.after(0, lambda e=e: self._loading_lbl.configure(
-                text=f"❌  Could not load mods from D1:\n{str(e)}", 
+                text=f"❌  Could not load mods from D1:\n{str(e)}",
                 text_color=RED, wraplength=400))
 
     def _catalog_ready(self):
@@ -819,7 +857,7 @@ class ModBrowserPanel(ctk.CTkFrame):
         dislikes = mod.get("dislikes", 0)
         total = likes + dislikes
         pct = (likes / total) if total > 0 else 1.0
-        vote = self._votes.get(mid)
+        vote = mod.get("user_vote")          # comes from server via HWID
         content_id = mod.get("content_id", "")
         already = self._is_installed(content_id, mod.get("name",""))
         busy = mid in self._installing
@@ -989,19 +1027,52 @@ class ModBrowserPanel(ctk.CTkFrame):
         return os.path.isdir(os.path.join(mods_dir, display_name))
 
     def _vote(self, mod, direction):
-        mid = mod.get("id", mod.get("name",""))
-        current = self._votes.get(mid)
-        if current == direction:
-            # Clicking same vote again → remove vote (toggle off)
-            self._votes.pop(mid, None)
-        else:
-            # Switch vote or set new vote (automatically replaces opposite)
-            self._votes[mid] = direction
-        try:
-            self._votes_file.write_text(json.dumps(self._votes), encoding="utf-8")
-        except Exception:
-            pass
+        mid      = mod.get("id", mod.get("name",""))
+        current  = mod.get("user_vote")
+
+        # Determine the new vote state (toggle off if same, else switch)
+        new_vote = None if current == direction else direction
+
+        # ── Optimistic local update ────────────────────────────────────────────
+        # Adjust like/dislike counts locally so the UI updates instantly
+        old_likes    = mod.get("likes", 0)
+        old_dislikes = mod.get("dislikes", 0)
+
+        if current == "up":
+            old_likes    = max(0, old_likes - 1)
+        elif current == "down":
+            old_dislikes = max(0, old_dislikes - 1)
+
+        if new_vote == "up":
+            old_likes    += 1
+        elif new_vote == "down":
+            old_dislikes += 1
+
+        mod["likes"]     = old_likes
+        mod["dislikes"]  = old_dislikes
+        mod["user_vote"] = new_vote
+
+        # Update the same object in self._all so sort/grid stay consistent
+        for m in self._all:
+            if m.get("id", m.get("name","")) == mid:
+                m["likes"]     = old_likes
+                m["dislikes"]  = old_dislikes
+                m["user_vote"] = new_vote
+                break
+
         self._build_mod_page(mod)
+
+        # ── POST to server in background ───────────────────────────────────────
+        def _send():
+            try:
+                _worker_post("/vote", {
+                    "mod_id":      str(mid),
+                    "hwid":        _HWID,
+                    "target_vote": new_vote,   # "up", "down", or None
+                })
+            except Exception:
+                pass  # silent — optimistic update already applied
+        threading.Thread(target=_send, daemon=True).start()
 
     def _start_install(self, mod):
         mid = mod.get("id", mod.get("name",""))
@@ -1065,6 +1136,20 @@ class ModBrowserPanel(ctk.CTkFrame):
 
     def _on_install_success(self, mod, mod_name):
         self._on_install(mod_name)
+        # Increment download count on server
+        mid = mod.get("id", mod.get("name",""))
+        def _send():
+            try:
+                _worker_post("/download", {"mod_id": str(mid), "hwid": _HWID})
+            except Exception:
+                pass
+        threading.Thread(target=_send, daemon=True).start()
+        # Optimistically update local count
+        mod["downloads"] = mod.get("downloads", 0) + 1
+        for m in self._all:
+            if m.get("id", m.get("name","")) == mid:
+                m["downloads"] = mod["downloads"]
+                break
         self._render_grid()
         if self._current_mod and self._current_mod.get("name") == mod_name:
             self._build_mod_page(mod)
