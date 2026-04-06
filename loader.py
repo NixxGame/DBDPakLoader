@@ -1227,6 +1227,41 @@ class DBDModLoader(_BaseClass):
 
         self.after(50, self._attempt_auto_detect)
         threading.Thread(target=self._check_for_update, daemon=True).start()
+        # ── NEW: Start analytics ping after UI loads ─────────────────────────────
+        self.after(200, self._start_ping)
+
+    # ── NEW: Send heartbeat to worker ───────────────────────────────────────────
+    def _ping_server(self):
+        """Send anonymous heartbeat with user data to the worker."""
+        import platform as _platform
+        try:
+            # Get all mod folders
+            all_folders = [
+                f for f in os.listdir(self.mods_dir)
+                if os.path.isdir(os.path.join(self.mods_dir, f))
+            ]
+            # Which ones are installed into Paks?
+            paks = self.get_active_paks_path()
+            suf = self.get_active_suffix()
+            installed = list(self._batch_check_installed(all_folders, paks, suf))
+
+            # For custom_mods, send all folders that are NOT installed.
+            custom = [f for f in all_folders if f not in installed]
+
+            _worker_post("/ping", {
+                "hwid":            _HWID,
+                "loader_version":  VERSION,
+                "platform":        self.platform_var.get(),
+                "installed_mods":  installed,
+                "custom_mods":     custom,
+                "mod_count":       len(all_folders),
+                "os_info":         _platform.version(),
+            })
+        except Exception:
+            pass  # never interrupt the UI
+
+    def _start_ping(self):
+        threading.Thread(target=self._ping_server, daemon=True).start()
 
     # All remaining methods are unchanged from your original script
     def _load_config(self):
