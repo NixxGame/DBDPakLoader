@@ -1,7 +1,7 @@
 import customtkinter as ctk
 import os, shutil, zipfile, tempfile, http.client, ssl, io, time
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox, simpledialog, Menu
 import subprocess, json, threading
 
 try:
@@ -37,11 +37,6 @@ VERSION = _read_local_version().lstrip("vV").strip()
 
 # ── Hardware ID ───────────────────────────────────────────────────────────────
 def _get_hwid():
-    """
-    Returns a stable anonymous machine ID.
-    Uses the Windows MachineGuid registry key, falls back to a UUID
-    stored in hwid.txt next to loader.py.
-    """
     import hashlib
     if _HAS_WINREG:
         try:
@@ -96,7 +91,6 @@ def _https_get_bytes(url, max_redirects=8):
     raise RuntimeError("Too many redirects")
 
 def _gofile_get_token():
-    """Get an anonymous GoFile token."""
     ctx = ssl.create_default_context()
     conn = http.client.HTTPSConnection("api.gofile.io", timeout=15, context=ctx)
     conn.request("POST", "/accounts", headers={"User-Agent": "DBDPakLoader/1.0", "Content-Length": "0"})
@@ -107,7 +101,6 @@ def _gofile_get_token():
     return data["data"]["token"]
 
 def _gofile_get_content(content_id, token):
-    """Fetch GoFile content metadata for a folder or file ID."""
     data = _https_get_json(
         "api.gofile.io",
         f"/contents/{content_id}?wt=4fd6sg89d7s6&cache=true",
@@ -118,10 +111,6 @@ def _gofile_get_content(content_id, token):
     return data["data"]
 
 def _gofile_collect_files(content, token):
-    """
-    Recursively collect all downloadable files from a GoFile content node.
-    Returns list of (filename, download_link) tuples.
-    """
     results = []
     node_type = content.get("type", "")
     if node_type == "file":
@@ -131,18 +120,11 @@ def _gofile_collect_files(content, token):
             if child.get("type") == "file":
                 results.append((child["name"], child["link"]))
             elif child.get("type") == "folder":
-                # Recurse into sub-folders
                 sub = _gofile_get_content(child["id"], token)
                 results.extend(_gofile_collect_files(sub, token))
     return results
 
 def _download_gofile_to_mod(page_url, mod_name, mods_dir, progress_cb=None):
-    """
-    Download all files from a GoFile share link into mods/{mod_name}/.
-    Handles both single-file and folder links.
-    If the folder contains exactly one .zip, extracts it instead.
-    progress_cb(file_index, total_files, filename) called before each file.
-    """
     content_id = page_url.rstrip("/").split("/")[-1]
     token = _gofile_get_token()
     content = _gofile_get_content(content_id, token)
@@ -154,7 +136,6 @@ def _download_gofile_to_mod(page_url, mod_name, mods_dir, progress_cb=None):
             "Make sure the link is correct and the content hasn't been deleted."
         )
 
-    # If there's a single zip, use the existing zip extraction path
     if len(files) == 1 and files[0][0].lower().endswith(".zip"):
         fname, link = files[0]
         if progress_cb:
@@ -165,7 +146,6 @@ def _download_gofile_to_mod(page_url, mod_name, mods_dir, progress_cb=None):
             progress_cb(1, 1, "Done")
         return
 
-    # Otherwise download each file directly into the mod folder
     dest = os.path.join(mods_dir, mod_name)
     os.makedirs(dest, exist_ok=True)
     for i, (fname, link) in enumerate(files):
@@ -176,8 +156,6 @@ def _download_gofile_to_mod(page_url, mod_name, mods_dir, progress_cb=None):
             fh.write(data)
     if progress_cb:
         progress_cb(len(files), len(files), "Done")
-
-# Google Drive support removed — functions and UI cleaned up.
 
 def _https_get_json(host, path, token=""):
     ctx = ssl.create_default_context()
@@ -193,7 +171,6 @@ def _https_get_json(host, path, token=""):
 _WORKER_HOST = "pakmods.lizzy032408.workers.dev"
 
 def _worker_post(path, payload):
-    """POST JSON to the Cloudflare Worker and return parsed response. Fire-and-forget safe."""
     body = json.dumps(payload).encode()
     ctx  = ssl.create_default_context()
     conn = http.client.HTTPSConnection(_WORKER_HOST, timeout=10, context=ctx)
@@ -310,7 +287,6 @@ _MAX_NAME_CHARS = 22
 def _truncate(name, limit=_MAX_NAME_CHARS):
     return name if len(name) <= limit else name[:limit-1]+"…"
 
-# Fonts - initialized after root window
 _FL=_FLS=_FSM=_FB=_FBM=_FBB=_FT=_FBL=_FM=_FD=_FP=_FST = None
 
 def _init_fonts():
@@ -328,18 +304,22 @@ def _init_fonts():
     _FP  = ctk.CTkFont(size=11)
     _FST = ctk.CTkFont(family="Segoe UI",size=11)
 
-# ── ModCard ───────────────────────────────────────────────────────────────────
+# ── ModCard (with multi‑select and context menu) ──────────────────────────────
 class ModCard(ctk.CTkFrame):
-    def __init__(self, master, folder_name, on_select, on_rename, **kw):
+    def __init__(self, master, folder_name, on_select, on_rename, on_context_menu, **kw):
         super().__init__(master,fg_color=BG_CARD,corner_radius=6,height=30,**kw)
         self.pack_propagate(False)
         self._normal=BG_CARD; self._hovered=BG_CARD_HOV; self._sel_col="#1e1830"
         self._is_sel=False; self.folder_name=folder_name
-        self.on_select=on_select; self.on_rename=on_rename
+        self.on_select=on_select
+        self.on_rename=on_rename
+        self.on_context_menu=on_context_menu
         self._build()
         for w in [self,self._nlbl,self._stripe,self._dot]:
-            w.bind("<Enter>",self._on_enter); w.bind("<Leave>",self._on_leave)
-        self._nlbl.bind("<Button-1>",self._click)
+            w.bind("<Button-1>", self._click)
+            w.bind("<Button-3>", self._right_click)
+            w.bind("<Enter>",self._on_enter)
+            w.bind("<Leave>",self._on_leave)
 
     def _build(self):
         self._stripe=ctk.CTkFrame(self,width=3,corner_radius=2,fg_color=ACCENT_DIM)
@@ -365,8 +345,14 @@ class ModCard(ctk.CTkFrame):
                 self._pen.pack_forget()
         except Exception: self._pen.pack_forget()
 
-    def _click(self,_=None): self.on_select(self.folder_name)
-    def _rename(self): self.on_rename(self.folder_name)
+    def _click(self, event):
+        self.on_select(self.folder_name, event)
+
+    def _right_click(self, event):
+        self.on_context_menu(self.folder_name, event)
+
+    def _rename(self):
+        self.on_rename(self.folder_name)
 
     def update_name(self,n):
         self.folder_name=n; self._nlbl.configure(text=_truncate(n))
@@ -384,12 +370,8 @@ class ModCard(ctk.CTkFrame):
 
     def set_installed(self,v): self._dot.configure(text_color=GREEN if v else TEXT_MUT)
 
-# ── PathEditorPanel ───────────────────────────────────────────────────────────
+# ── PathEditorPanel (unchanged) ───────────────────────────────────────────────
 class PathEditorPanel(ctk.CTkFrame):
-    """
-    Full-area inline panel (same style as ModBrowserPanel).
-    Replaces the main content area when "Path Editor" is clicked.
-    """
     _SUFFIXES = ["-Windows", "-EGS", "-WinGDK"]
 
     def __init__(self, master, custom_paths, builtin_platforms, on_save, on_close):
@@ -402,9 +384,7 @@ class PathEditorPanel(ctk.CTkFrame):
         self._build()
         self._render_rows()
 
-    # ── layout ────────────────────────────────────────────────────────────────
     def _build(self):
-        # Top bar (mirrors ModBrowserPanel style)
         top = ctk.CTkFrame(self, fg_color=BG_PANEL, height=52, corner_radius=0)
         top.pack(fill="x")
         top.pack_propagate(False)
@@ -421,8 +401,8 @@ class PathEditorPanel(ctk.CTkFrame):
 
         ctk.CTkButton(top, text="💾  Save", width=90, height=34,
                       fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black",
-                      corner_radius=8, font=ctk.CTkFont(family="Segoe UI", size=12,
-                      weight="bold"), command=self._save).pack(side="right", padx=(0,6), pady=10)
+                      corner_radius=8, font=ctk.CTkFont(family="Segoe UI", size=12, weight="bold"),
+                      command=self._save).pack(side="right", padx=(0,6), pady=10)
 
         ctk.CTkButton(top, text="＋  Add Path", width=110, height=34,
                       fg_color=BG_CARD, hover_color=BG_CARD_HOV,
@@ -430,7 +410,6 @@ class PathEditorPanel(ctk.CTkFrame):
                       corner_radius=8, font=ctk.CTkFont(family="Segoe UI", size=12),
                       command=self._add_row).pack(side="right", padx=(0,6), pady=10)
 
-        # Column header strip
         ch = ctk.CTkFrame(self, fg_color=BG_PANEL, height=32, corner_radius=0)
         ch.pack(fill="x")
         ch.pack_propagate(False)
@@ -443,7 +422,6 @@ class PathEditorPanel(ctk.CTkFrame):
                      width=130, anchor="w").pack(side="left", padx=(0,8))
         ctk.CTkLabel(ch, text="", width=36).pack(side="left", padx=(0,16))
 
-        # Built-in read-only section
         ctk.CTkLabel(self, text="BUILT-IN PLATFORMS", font=_FSM,
                      text_color=TEXT_MUT).pack(anchor="w", padx=24, pady=(14, 4))
         for name, entry in self._builtins.items():
@@ -453,7 +431,6 @@ class PathEditorPanel(ctk.CTkFrame):
         ctk.CTkLabel(self, text="CUSTOM PATHS", font=_FSM,
                      text_color=TEXT_MUT).pack(anchor="w", padx=24, pady=(10, 4))
 
-        # Scrollable custom rows
         self._scroll = ctk.CTkScrollableFrame(self, fg_color="transparent",
                                                scrollbar_button_color=TEXT_MUT,
                                                scrollbar_button_hover_color=TEXT_SEC)
@@ -463,7 +440,6 @@ class PathEditorPanel(ctk.CTkFrame):
         row = ctk.CTkFrame(self, fg_color=BG_CARD, corner_radius=7, height=38)
         row.pack(fill="x", padx=20, pady=2)
         row.pack_propagate(False)
-        # lock icon instead of pencil
         ctk.CTkLabel(row, text="🔒", width=28, font=_FP,
                      text_color=TEXT_MUT).pack(side="left", padx=(10, 4))
         ctk.CTkLabel(row, text=name, font=_FB, text_color=TEXT_SEC,
@@ -474,7 +450,6 @@ class PathEditorPanel(ctk.CTkFrame):
         ctk.CTkLabel(row, text=entry.get("suffix", ""), font=_FB,
                      text_color=TEXT_MUT, width=130, anchor="w").pack(side="left", padx=(0, 8))
 
-    # ── custom row rendering ──────────────────────────────────────────────────
     def _render_rows(self):
         for w in self._scroll.winfo_children():
             w.destroy()
@@ -488,7 +463,6 @@ class PathEditorPanel(ctk.CTkFrame):
         row_frame.pack(fill="x", pady=3)
         row_frame.pack_propagate(False)
 
-        # Pencil toggle
         edit_btn = ctk.CTkButton(row_frame, text="✏", width=28, height=28,
                                   fg_color="transparent", hover_color="#2a2040",
                                   text_color=ACCENT, font=_FP, corner_radius=4,
@@ -541,7 +515,6 @@ class PathEditorPanel(ctk.CTkFrame):
             "suf_var": suf_var, "suf_menu": suf_menu,
         })
 
-    # ── row actions ───────────────────────────────────────────────────────────
     def _toggle_edit(self, idx):
         if idx >= len(self._rows): return
         row = self._rows[idx]
@@ -554,7 +527,7 @@ class PathEditorPanel(ctk.CTkFrame):
         row["edit_btn"].configure(
             text_color=ORANGE if editing else ACCENT,
             fg_color="#1a1020" if editing else "transparent")
-        if not editing:      # committed — flush to data
+        if not editing:
             self._flush(idx)
 
     def _flush(self, idx):
@@ -594,8 +567,7 @@ class PathEditorPanel(ctk.CTkFrame):
     def _close(self):
         self._on_close()
 
-
-# ── ShareDialog ───────────────────────────────────────────────────────────────
+# ── ShareDialog (unchanged) ───────────────────────────────────────────────────
 class ShareDialog(ctk.CTkToplevel):
     def __init__(self,master,mod_name,mod_path):
         super().__init__(master)
@@ -711,7 +683,7 @@ class ShareDialog(ctk.CTkToplevel):
             self._cb.configure(text="✅ Copied!")
             self.after(2000,lambda:self._cb.configure(text="📋 Copy"))
 
-# ── ModBrowserPanel (loads from your D1 Worker) ───────────────────────────────
+# ── ModBrowserPanel (unchanged) ───────────────────────────────────────────────
 class ModBrowserPanel(ctk.CTkFrame):
     CW = 230
     CH = 330
@@ -797,7 +769,6 @@ class ModBrowserPanel(ctk.CTkFrame):
             self._grid_page, fg_color="transparent",
             scrollbar_button_color=TEXT_MUT, scrollbar_button_hover_color=TEXT_SEC)
 
-        # ── Pagination bar ──────────────────────────────────────────────────────
         self._pag_bar = ctk.CTkFrame(self._grid_page, fg_color=BG_PANEL, height=46, corner_radius=0)
         self._prev_btn = ctk.CTkButton(
             self._pag_bar, text="◀", width=40, height=32,
@@ -927,7 +898,6 @@ class ModBrowserPanel(ctk.CTkFrame):
         start = self._page * self._page_size
         page_mods = self._filtered[start:start + self._page_size]
 
-        # Fixed 4-column layout
         cols = 4
         for i, mod in enumerate(page_mods):
             if i % cols == 0:
@@ -938,8 +908,6 @@ class ModBrowserPanel(ctk.CTkFrame):
     def _make_card(self, parent, mod):
         mid = mod.get("id", mod.get("name",""))
         name = mod.get("name","Unnamed")
-        # Installed detection: check by content_id (actual pak filename stem) if provided,
-        # otherwise fall back to folder name matching.
         content_id = mod.get("content_id", "")
         already = self._is_installed(content_id, name)
         busy = mid in self._installing
@@ -967,14 +935,12 @@ class ModBrowserPanel(ctk.CTkFrame):
         if img_url and _HAS_PIL:
             threading.Thread(target=self._load_thumb,
                              args=(img_url, tl, self.CW-20, 145), daemon=True).start()
-        # Show a small installed badge over the thumbnail image
         if already:
             try:
                 badge = ctk.CTkLabel(tf, text="✔ Installed", font=_FSM,
                                      fg_color=GREEN, text_color="black",
                                      corner_radius=6)
                 badge.place(x=8, y=8)
-                # ensure badge stays above the thumbnail even after async image load
                 try:
                     self.after(50, lambda b=badge: b.lift())
                     self.after(300, lambda b=badge: b.lift())
@@ -998,7 +964,6 @@ class ModBrowserPanel(ctk.CTkFrame):
 
         sr = ctk.CTkFrame(card, fg_color="transparent")
         sr.pack(anchor="w", padx=10, pady=(3,0))
-        # Compact stats into a single label to reduce visual clutter
         stats_txt = f"👍 {likes:,}   👎 {dislikes:,}   ⬇ {mod.get('downloads',0):,}"
         ctk.CTkLabel(sr, text=stats_txt, font=_FB, text_color=TEXT_MUT).pack(side="left")
 
@@ -1037,7 +1002,6 @@ class ModBrowserPanel(ctk.CTkFrame):
                               command=lambda m=mod: self._start_install(m)
                               ).pack(fill="x", padx=10, pady=(0,8))
             else:
-                # Gray-out install when no download link
                 ctk.CTkButton(card, text="⬇ Install", height=30,
                               fg_color=BG_CARD, hover_color=BG_CARD, text_color=TEXT_MUT,
                               corner_radius=7, state="disabled", font=_FB
@@ -1045,7 +1009,6 @@ class ModBrowserPanel(ctk.CTkFrame):
 
         for w in [card, tf, tl]:
             w.bind("<Button-1>", lambda e, m=mod: self._show_mod_page(m))
-            # Only apply hover color if card has a downloadable link
             if has_download:
                 w.bind("<Enter>",    lambda e, c=card: c.configure(fg_color=BG_CARD_HOV))
                 w.bind("<Leave>",    lambda e, c=card: c.configure(fg_color=BG_CARD))
@@ -1072,7 +1035,7 @@ class ModBrowserPanel(ctk.CTkFrame):
         dislikes = mod.get("dislikes", 0)
         total = likes + dislikes
         pct = (likes / total) if total > 0 else 1.0
-        vote = mod.get("user_vote")          # comes from server via HWID
+        vote = mod.get("user_vote")
         content_id = mod.get("content_id", "")
         already = self._is_installed(content_id, mod.get("name",""))
         busy = mid in self._installing
@@ -1211,16 +1174,10 @@ class ModBrowserPanel(ctk.CTkFrame):
                          ).pack(side="left", padx=4, pady=10)
 
     def _is_installed(self, content_id, display_name):
-        """
-        Check if a mod is installed by scanning all mod folders for files whose
-        base name (stripped of platform suffix) matches content_id.
-        Falls back to folder-name matching if content_id is empty.
-        """
         mods_dir = self._mods_dir
         if not os.path.isdir(mods_dir):
             return False
         if content_id:
-            # content_id is the canonical pak stem, e.g. "SomeMod_P"
             content_id_lower = content_id.lower()
             for folder in os.listdir(mods_dir):
                 fp = os.path.join(mods_dir, folder)
@@ -1229,7 +1186,6 @@ class ModBrowserPanel(ctk.CTkFrame):
                 try:
                     for f in os.listdir(fp):
                         stem = os.path.splitext(f)[0].lower()
-                        # Strip known platform suffixes before comparing
                         for suf in ("-windows", "-egs", "-wingdk", ""):
                             if suf and stem.endswith(suf):
                                 stem = stem[:-len(suf)]
@@ -1238,18 +1194,14 @@ class ModBrowserPanel(ctk.CTkFrame):
                 except OSError:
                     continue
             return False
-        # Fallback: check if a folder whose name matches display_name exists
         return os.path.isdir(os.path.join(mods_dir, display_name))
 
     def _vote(self, mod, direction):
         mid      = mod.get("id", mod.get("name",""))
         current  = mod.get("user_vote")
 
-        # Determine the new vote state (toggle off if same, else switch)
         new_vote = None if current == direction else direction
 
-        # ── Optimistic local update ────────────────────────────────────────────
-        # Adjust like/dislike counts locally so the UI updates instantly
         old_likes    = mod.get("likes", 0)
         old_dislikes = mod.get("dislikes", 0)
 
@@ -1267,7 +1219,6 @@ class ModBrowserPanel(ctk.CTkFrame):
         mod["dislikes"]  = old_dislikes
         mod["user_vote"] = new_vote
 
-        # Update the same object in self._all so sort/grid stay consistent
         for m in self._all:
             if m.get("id", m.get("name","")) == mid:
                 m["likes"]     = old_likes
@@ -1277,16 +1228,15 @@ class ModBrowserPanel(ctk.CTkFrame):
 
         self._build_mod_page(mod)
 
-        # ── POST to server in background ───────────────────────────────────────
         def _send():
             try:
                 _worker_post("/vote", {
                     "mod_id":      str(mid),
                     "hwid":        _HWID,
-                    "target_vote": new_vote,   # "up", "down", or None
+                    "target_vote": new_vote,
                 })
             except Exception:
-                pass  # silent — optimistic update already applied
+                pass
         threading.Thread(target=_send, daemon=True).start()
 
     def _start_install(self, mod):
@@ -1311,16 +1261,12 @@ class ModBrowserPanel(ctk.CTkFrame):
                 txt = f"⬇ Downloading ({done+1}/{total}): {fname}"
                 self.after(0, lambda t=txt: self._update_install_status(mid, t))
 
-            # (Removed Google Drive folder handling)
-
-            # GoFile share link — handles folders, individual files, and zips
             if "gofile.io/d/" in url:
                 _download_gofile_to_mod(url, mod_name, self._mods_dir, _prog)
                 self._installing.discard(mid)
                 self.after(0, lambda: self._on_install_success(mod, mod_name))
                 return
 
-            # Plain direct URL (zip or other archive)
             data = _https_get_bytes(url)
             _import_mod_from_zip_bytes(data, mod_name, self._mods_dir)
             self._installing.discard(mid)
@@ -1332,11 +1278,8 @@ class ModBrowserPanel(ctk.CTkFrame):
             self.after(0, self._render_grid)
 
     def _update_install_status(self, mid, text):
-        """Update the installing label on the mod detail page if it's currently shown."""
         if (self._current_mod and
                 self._current_mod.get("id", self._current_mod.get("name")) == mid):
-            # Rebuild the page so the busy label reflects the new text — lightweight
-            # alternative: just find and reconfigure the label if it exists
             for w in self._mod_page.winfo_children():
                 self._find_and_update_label(w, "⏳ Installing…", text)
 
@@ -1351,7 +1294,6 @@ class ModBrowserPanel(ctk.CTkFrame):
 
     def _on_install_success(self, mod, mod_name):
         self._on_install(mod_name)
-        # Increment download count on server
         mid = mod.get("id", mod.get("name",""))
         def _send():
             try:
@@ -1359,7 +1301,6 @@ class ModBrowserPanel(ctk.CTkFrame):
             except Exception:
                 pass
         threading.Thread(target=_send, daemon=True).start()
-        # Optimistically update local count
         mod["downloads"] = mod.get("downloads", 0) + 1
         for m in self._all:
             if m.get("id", m.get("name","")) == mid:
@@ -1369,13 +1310,13 @@ class ModBrowserPanel(ctk.CTkFrame):
         if self._current_mod and self._current_mod.get("name") == mod_name:
             self._build_mod_page(mod)
 
-# ── Main App ──────────────────────────────────────────────────────────────────
+# ── Main App (with multi‑select & context menu, fixed DND binding) ────────────
 _BaseClass = TkinterDnD.Tk if _HAS_DND else ctk.CTk
 
 class DBDModLoader(_BaseClass):
     def __init__(self):
         super().__init__()
-        _init_fonts()                     # ← Fixed: fonts now created after root window
+        _init_fonts()
         self.title("PAK Loader")
         self.geometry("1320x800")
         self.minsize(1100,600)
@@ -1386,7 +1327,7 @@ class DBDModLoader(_BaseClass):
         self.config_file = _PAK_CONFIG / "loader_config.json"
         self.custom_game_root = None
         self.custom_paks_path = None
-        self.custom_paths = []   # list of {name, path, suffix}
+        self.custom_paths = []
         self._builtin_platforms = {
             "Steam (-Windows)":         {"suffix": "-Windows", "path": r"C:\Program Files (x86)\Steam\steamapps\common\Dead by Daylight\DeadByDaylight\Content\Paks"},
             "Epic Games (-EGS)":        {"suffix": "-EGS",     "path": r"C:\Program Files\Epic Games\DeadByDaylight\DeadByDaylight\Content\Paks"},
@@ -1402,12 +1343,18 @@ class DBDModLoader(_BaseClass):
         self._search_after_id = None
         self._latest_version = None
 
+        # Multi‑selection state
+        self.selected_mods = set()
+        self.last_selected_mod = None
+        self.mod_order = []
+        self._bulk_frame = None
+
         try:
             _PAK_CONFIG.mkdir(parents=True, exist_ok=True)
             (_PAK_CONFIG / "mods").mkdir(exist_ok=True)
         except Exception:
             pass
-        # ── Migrate old C:\mods folder if it exists ───────────────────────────
+
         _OLD_MODS = Path(r"C:\mods")
         _NEW_MODS = _PAK_CONFIG / "mods"
         if _OLD_MODS.exists() and _OLD_MODS.is_dir():
@@ -1418,46 +1365,40 @@ class DBDModLoader(_BaseClass):
                         if not dest.exists():
                             shutil.move(str(item), str(dest))
                         else:
-                            # merge: move files that don't already exist
                             for f in item.iterdir():
                                 if f.is_file() and not (dest / f.name).exists():
                                     shutil.move(str(f), str(dest / f.name))
-                # Remove old folder only if now empty
                 remaining = list(_OLD_MODS.iterdir())
                 if not remaining:
                     _OLD_MODS.rmdir()
             except Exception:
                 pass
+
         self._load_config()
         self._build_ui()
         self.load_mods()
 
         if _HAS_DND:
             self.drop_target_register(DND_FILES)
-            self.dnd_bind("<<Drop>>", self._on_drop)
+            # FIX: bind drop event to the main area instead of root to avoid tkapp attribute error
+            self.main_area.dnd_bind("<<Drop>>", self._on_drop)
             self._setup_drag_feedback()
 
         self.after(50, self._attempt_auto_detect)
         threading.Thread(target=self._check_for_update, daemon=True).start()
-        # ── NEW: Start analytics ping after UI loads ─────────────────────────────
         self.after(200, self._start_ping)
 
-    # ── NEW: Send heartbeat to worker ───────────────────────────────────────────
+    # ── Analytics ping ─────────────────────────────────────────────────────────
     def _ping_server(self):
-        """Send anonymous heartbeat with user data to the worker."""
         import platform as _platform
         try:
-            # Get all mod folders
             all_folders = [
                 f for f in os.listdir(self.mods_dir)
                 if os.path.isdir(os.path.join(self.mods_dir, f))
             ]
-            # Which ones are installed into Paks?
             paks = self.get_active_paks_path()
             suf = self.get_active_suffix()
             installed = list(self._batch_check_installed(all_folders, paks, suf))
-
-            # For custom_mods, send all folders that are NOT installed.
             custom = [f for f in all_folders if f not in installed]
 
             _worker_post("/ping", {
@@ -1470,12 +1411,12 @@ class DBDModLoader(_BaseClass):
                 "os_info":         _platform.version(),
             })
         except Exception:
-            pass  # never interrupt the UI
+            pass
 
     def _start_ping(self):
         threading.Thread(target=self._ping_server, daemon=True).start()
 
-    # All remaining methods are unchanged from your original script
+    # ── Config / helpers ──────────────────────────────────────────────────────
     def _load_config(self):
         self._pending_platform = None
         if self.config_file.exists():
@@ -1490,7 +1431,6 @@ class DBDModLoader(_BaseClass):
             except Exception: pass
 
     def _rebuild_platforms(self):
-        """Rebuild self.platforms from builtins + custom_paths."""
         self.platforms = dict(self._builtin_platforms)
         for cp in self.custom_paths:
             name = cp.get("name", "").strip()
@@ -1557,6 +1497,238 @@ class DBDModLoader(_BaseClass):
         self._suffix_cache = self.platforms.get(plat, {}).get("suffix", "")
         return self._suffix_cache
 
+    def _batch_check_installed(self, folders, paks_path, suffix):
+        inst = set()
+        if not paks_path or not paks_path.exists(): return inst
+        try:
+            pf = {f.lower() for f in os.listdir(paks_path)}
+        except OSError:
+            return inst
+        for folder in folders:
+            mp = os.path.join(self.mods_dir, folder)
+            try:
+                for f in os.listdir(mp):
+                    if os.path.isfile(os.path.join(mp, f)):
+                        b, e = os.path.splitext(f)
+                        n = ("-".join(b.split("-")[:-1]) + suffix + e if "-" in b and suffix else b + suffix + e)
+                        if n.lower() in pf:
+                            inst.add(folder)
+                            break
+            except OSError:
+                continue
+        return inst
+
+    # ── Multi‑selection core logic ────────────────────────────────────────────
+    def _clear_selection(self):
+        self.selected_mods.clear()
+        self.last_selected_mod = None
+        for name, card in self._card_map.items():
+            card.set_selected(False)
+        self._update_selection_ui()
+
+    def _select_mods_single(self, folder_name, add=False):
+        if add:
+            if folder_name in self.selected_mods:
+                self.selected_mods.discard(folder_name)
+            else:
+                self.selected_mods.add(folder_name)
+            self.last_selected_mod = folder_name
+        else:
+            self.selected_mods = {folder_name}
+            self.last_selected_mod = folder_name
+        for name, card in self._card_map.items():
+            card.set_selected(name in self.selected_mods)
+        self._update_selection_ui()
+
+    def _select_mods_range(self, folder_name):
+        if not self.last_selected_mod or self.last_selected_mod not in self.mod_order:
+            self._select_mods_single(folder_name, add=False)
+            return
+        try:
+            idx_last = self.mod_order.index(self.last_selected_mod)
+            idx_cur  = self.mod_order.index(folder_name)
+        except ValueError:
+            self._select_mods_single(folder_name, add=False)
+            return
+        start, end = sorted([idx_last, idx_cur])
+        new_sel = set(self.mod_order[start:end+1])
+        self.selected_mods = new_sel
+        self.last_selected_mod = folder_name
+        for name, card in self._card_map.items():
+            card.set_selected(name in self.selected_mods)
+        self._update_selection_ui()
+
+    def _on_mod_click(self, folder_name, event):
+        ctrl = (event.state & 0x0004) != 0
+        shift = (event.state & 0x0001) != 0
+        if ctrl:
+            self._select_mods_single(folder_name, add=True)
+        elif shift:
+            self._select_mods_range(folder_name)
+        else:
+            self._select_mods_single(folder_name, add=False)
+            self.select_mod(folder_name)
+
+    def _on_mod_context_menu(self, folder_name, event):
+        if folder_name not in self.selected_mods:
+            self._select_mods_single(folder_name, add=False)
+            self.select_mod(folder_name)
+
+        menu = Menu(self, tearoff=0, bg=BG_PANEL, fg=TEXT_PRI,
+                    activebackground=BG_CARD_HOV, activeforeground=ACCENT)
+        single = len(self.selected_mods) == 1
+        menu.add_command(label="Add to Paks", command=self._bulk_install)
+        menu.add_command(label="Remove from Paks", command=self._bulk_uninstall)
+        menu.add_command(label="Delete from Loader", command=self._bulk_delete)
+        menu.add_separator()
+        if single:
+            menu.add_command(label="Rename", command=lambda: self.rename_mod(folder_name))
+            menu.add_command(label="Open Folder", command=self._open_current_mod_folder)
+            menu.add_command(label="Share", command=self._share_current)
+        menu.add_separator()
+        menu.add_command(label="Clear Selection", command=self._clear_selection)
+        menu.post(event.x_root, event.y_root)
+
+    def _update_selection_ui(self):
+        cnt = len(self.selected_mods)
+        self.status_var.set(f"{cnt} mod{'s' if cnt!=1 else ''} selected" if cnt else "Ready")
+
+        if cnt == 0:
+            self.empty_frame.place(relx=0.5, rely=0.5, anchor="center")
+            self.detail_frame.place_forget()
+            if self._bulk_frame:
+                self._bulk_frame.place_forget()
+        elif cnt == 1:
+            self.empty_frame.place_forget()
+            if self._bulk_frame:
+                self._bulk_frame.place_forget()
+            self.detail_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
+            only_mod = next(iter(self.selected_mods))
+            if self.current_mod != only_mod:
+                self.select_mod(only_mod)
+        else:
+            self.empty_frame.place_forget()
+            self.detail_frame.place_forget()
+            if not self._bulk_frame:
+                self._build_bulk_frame()
+            self._bulk_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
+            self._update_bulk_labels()
+
+    def _build_bulk_frame(self):
+        self._bulk_frame = ctk.CTkFrame(self._content, fg_color=BG_ROOT)
+        center = ctk.CTkFrame(self._bulk_frame, fg_color=BG_PANEL, corner_radius=20)
+        center.place(relx=0.5, rely=0.5, anchor="center", width=500, height=300)
+
+        ctk.CTkLabel(center, text="Multiple Mods Selected", font=_FT,
+                     text_color=ACCENT).pack(pady=(30, 10))
+
+        self._bulk_count_lbl = ctk.CTkLabel(center, text="", font=_FBM,
+                                            text_color=TEXT_SEC)
+        self._bulk_count_lbl.pack(pady=(0, 20))
+
+        btn_frame = ctk.CTkFrame(center, fg_color="transparent")
+        btn_frame.pack(pady=10)
+        ctk.CTkButton(btn_frame, text="Install all", width=140, height=40,
+                      fg_color=ACCENT, hover_color=ACCENT_DIM,
+                      command=self._bulk_install).pack(side="left", padx=8)
+        ctk.CTkButton(btn_frame, text="Remove all", width=140, height=40,
+                      fg_color="#2e1010", hover_color="#4a1515",
+                      border_width=1, border_color=RED, text_color=RED,
+                      command=self._bulk_uninstall).pack(side="left", padx=8)
+        ctk.CTkButton(btn_frame, text="Delete all", width=140, height=40,
+                      fg_color=BG_CARD, hover_color=BG_CARD_HOV,
+                      text_color=RED, command=self._bulk_delete).pack(side="left", padx=8)
+
+        ctk.CTkButton(center, text="Clear selection", width=200, height=35,
+                      fg_color=BG_FIELD, hover_color=BG_CARD,
+                      command=self._clear_selection).pack(pady=(20, 10))
+
+    def _update_bulk_labels(self):
+        if self._bulk_frame:
+            self._bulk_count_lbl.configure(text=f"{len(self.selected_mods)} mods selected")
+
+    # ── Bulk actions ──────────────────────────────────────────────────────────
+    def _bulk_install(self):
+        if not self.selected_mods:
+            return
+        if not messagebox.askyesno("Bulk Install",
+                f"Install {len(self.selected_mods)} mod(s) into Paks folder?\n"
+                "Existing files will be overwritten."):
+            return
+        paks = self.get_active_paks_path()
+        if not paks:
+            messagebox.showerror("Path Error", "Paks folder not found.")
+            return
+        suf = self.get_active_suffix()
+        success = 0
+        for mod_name in list(self.selected_mods):
+            mod_path = os.path.join(self.mods_dir, mod_name)
+            if not os.path.isdir(mod_path):
+                continue
+            try:
+                for f in os.listdir(mod_path):
+                    if os.path.isfile(os.path.join(mod_path, f)):
+                        b, e = os.path.splitext(f)
+                        nn = ("-".join(b.split("-")[:-1]) + suf + e if "-" in b and suf else b + suf + e)
+                        shutil.copy2(Path(mod_path) / f, paks / nn)
+                success += 1
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed installing {mod_name}:\n{e}")
+        self._invalidate_paks_cache()
+        self.status_var.set(f"Installed {success} mod(s)")
+        self.load_mods()
+        self._clear_selection()
+
+    def _bulk_uninstall(self):
+        if not self.selected_mods:
+            return
+        if not messagebox.askyesno("Bulk Remove",
+                f"Remove {len(self.selected_mods)} mod(s) from Paks folder?"):
+            return
+        paks = self.get_active_paks_path()
+        if not paks:
+            messagebox.showerror("Path Error", "Paks folder not found.")
+            return
+        suf = self.get_active_suffix()
+        removed = 0
+        for mod_name in list(self.selected_mods):
+            mod_path = os.path.join(self.mods_dir, mod_name)
+            if not os.path.isdir(mod_path):
+                continue
+            try:
+                for f in os.listdir(mod_path):
+                    if os.path.isfile(os.path.join(mod_path, f)):
+                        b, e = os.path.splitext(f)
+                        nn = ("-".join(b.split("-")[:-1]) + suf + e if "-" in b and suf else b + suf + e)
+                        t = paks / nn
+                        if t.exists():
+                            t.unlink()
+                            removed += 1
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed removing {mod_name}:\n{e}")
+        self._invalidate_paks_cache()
+        self.status_var.set(f"Removed {removed} file(s)")
+        self.load_mods()
+        self._clear_selection()
+
+    def _bulk_delete(self):
+        if not self.selected_mods:
+            return
+        if not messagebox.askyesno("Bulk Delete",
+                f"Permanently DELETE {len(self.selected_mods)} mod(s) from the loader?\n"
+                "This will not affect files already in your Paks folder."):
+            return
+        for mod_name in list(self.selected_mods):
+            mod_path = os.path.join(self.mods_dir, mod_name)
+            if os.path.isdir(mod_path):
+                try:
+                    shutil.rmtree(mod_path)
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to delete {mod_name}:\n{e}")
+        self.load_mods()
+        self._clear_selection()
+
+    # ── UI building ───────────────────────────────────────────────────────────
     def _build_ui(self):
         self._build_statusbar()
         self._build_sidebar()
@@ -1630,7 +1802,6 @@ class DBDModLoader(_BaseClass):
                       fg_color=BG_FIELD, hover_color=BG_CARD, border_width=1,
                       border_color=ACCENT_DIM, text_color=ACCENT, corner_radius=9,
                       command=self.open_path_editor).pack(side="right", padx=(0,6), pady=12)
-        # Google Drive key UI removed
         bg = ctk.CTkFrame(topbar, fg_color="transparent")
         bg.pack(side="right", padx=20, pady=12)
         ctk.CTkButton(bg, text="🧹  Clean DBD", height=34, width=130, fg_color="#2e1010",
@@ -1699,8 +1870,11 @@ class DBDModLoader(_BaseClass):
         self._search_after_id = self.after(180, self.load_mods)
 
     def load_mods(self):
+        self._clear_selection()
         for w in self.mods_scroll.winfo_children(): w.destroy()
         self._card_map.clear()
+        self.mod_order.clear()
+
         q = self.search_var.get().strip().lower()
         folders = [f for f in os.listdir(self.mods_dir) if os.path.isdir(os.path.join(self.mods_dir, f))]
         if q: folders = [f for f in folders if q in f.lower()]
@@ -1708,64 +1882,33 @@ class DBDModLoader(_BaseClass):
             ctk.CTkLabel(self.mods_scroll, text="No mods found.", font=_FBM,
                          text_color=TEXT_SEC, justify="center").pack(pady=40)
             return
+
         paks = self.get_active_paks_path()
         suf = self.get_active_suffix()
         inst = self._batch_check_installed(folders, paks, suf)
         folders.sort(key=lambda f: (0 if f in inst else 1, f.lower()))
+        self.mod_order = folders[:]
+
         for folder in folders:
-            card = ModCard(self.mods_scroll, folder, on_select=self.select_mod, on_rename=self.rename_mod)
+            card = ModCard(self.mods_scroll, folder,
+                           on_select=self._on_mod_click,
+                           on_rename=self.rename_mod,
+                           on_context_menu=self._on_mod_context_menu)
             card.pack(fill="x", pady=2, padx=2)
             self._card_map[folder] = card
             card.set_installed(folder in inst)
+
         if self.current_mod and self.current_mod in self._card_map:
             self._card_map[self.current_mod].set_selected(True)
-
-    def _batch_check_installed(self, folders, paks_path, suffix):
-        inst = set()
-        if not paks_path or not paks_path.exists(): return inst
-        try:
-            pf = {f.lower() for f in os.listdir(paks_path)}
-        except OSError:
-            return inst
-        for folder in folders:
-            mp = os.path.join(self.mods_dir, folder)
-            try:
-                for f in os.listdir(mp):
-                    if os.path.isfile(os.path.join(mp, f)):
-                        b, e = os.path.splitext(f)
-                        n = ("-".join(b.split("-")[:-1]) + suffix + e if "-" in b and suffix else b + suffix + e)
-                        if n.lower() in pf:
-                            inst.add(folder)
-                            break
-            except OSError:
-                continue
-        return inst
-
-    def _on_drop(self, event):
-        self.main_area.configure(fg_color=self._orig_bg)
-        raw = event.data.strip()
-        import re
-        paths = ([a or b for a, b in re.findall(r'\{([^}]+)\}|(\S+)', raw)]
-                 if raw.startswith("{") else raw.split())
-        imported = 0
-        for p in paths:
-            p = p.strip().strip("{}")
-            if p:
-                try:
-                    self._do_import(p, silent=len(paths) > 1)
-                    imported += 1
-                except Exception as e:
-                    messagebox.showerror("Import Error", str(e))
-        if len(paths) > 1:
-            self.load_mods()
-            self.status_var.set(f"Imported {imported} of {len(paths)} items")
+            self.selected_mods = {self.current_mod}
+            self._update_selection_ui()
 
     def select_mod(self, folder_name):
-        for n, c in self._card_map.items():
-            c.set_selected(n == folder_name)
         self.current_mod = folder_name
         self.current_mod_path = os.path.join(self.mods_dir, folder_name)
         self.empty_frame.place_forget()
+        if self._bulk_frame:
+            self._bulk_frame.place_forget()
         self.detail_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.mod_title.configure(text=folder_name)
         inst = self.is_mod_installed()
@@ -1860,6 +2003,8 @@ class DBDModLoader(_BaseClass):
             return
         self.empty_frame.place_forget()
         self.detail_frame.place_forget()
+        if self._bulk_frame:
+            self._bulk_frame.place_forget()
         self._browser_panel = ModBrowserPanel(
             self._content,
             mods_dir=self.mods_dir,
@@ -1908,6 +2053,14 @@ class DBDModLoader(_BaseClass):
             self.current_mod = nn
             self.current_mod_path = np
             self.mod_title.configure(text=nn)
+        if folder_name in self.selected_mods:
+            self.selected_mods.discard(folder_name)
+            self.selected_mods.add(nn)
+        if self.last_selected_mod == folder_name:
+            self.last_selected_mod = nn
+        if folder_name in self.mod_order:
+            idx = self.mod_order.index(folder_name)
+            self.mod_order[idx] = nn
         self.status_var.set(f"Renamed: {folder_name} → {nn}")
         self.load_mods()
 
@@ -1946,8 +2099,6 @@ class DBDModLoader(_BaseClass):
             ctk.CTkLabel(row, text="→", font=_FM, text_color=ACCENT, width=22).pack(side="left", padx=(10,5), pady=7)
             ctk.CTkLabel(row, text=nn, font=_FM, text_color="#b8b8ff", anchor="w").pack(side="left", fill="x", expand=True, pady=7)
 
-    
-
     def open_path_editor(self):
         if hasattr(self, "_path_panel") and self._path_panel.winfo_exists():
             return
@@ -1955,6 +2106,8 @@ class DBDModLoader(_BaseClass):
         self.detail_frame.place_forget()
         if hasattr(self, "_browser_panel") and self._browser_panel.winfo_exists():
             self._browser_panel.place_forget()
+        if self._bulk_frame:
+            self._bulk_frame.place_forget()
         self._path_panel = PathEditorPanel(
             self._content,
             custom_paths=self.custom_paths,
@@ -2195,6 +2348,25 @@ class DBDModLoader(_BaseClass):
         else:
             subprocess.Popen(["python", str(_SCRIPT_DIR / "loader.py")], cwd=str(_SCRIPT_DIR))
         self.destroy()
+
+    def _on_drop(self, event):
+        self.main_area.configure(fg_color=self._orig_bg)
+        raw = event.data.strip()
+        import re
+        paths = ([a or b for a, b in re.findall(r'\{([^}]+)\}|(\S+)', raw)]
+                 if raw.startswith("{") else raw.split())
+        imported = 0
+        for p in paths:
+            p = p.strip().strip("{}")
+            if p:
+                try:
+                    self._do_import(p, silent=len(paths) > 1)
+                    imported += 1
+                except Exception as e:
+                    messagebox.showerror("Import Error", str(e))
+        if len(paths) > 1:
+            self.load_mods()
+            self.status_var.set(f"Imported {imported} of {len(paths)} items")
 
 if __name__ == "__main__":
     app = DBDModLoader()
