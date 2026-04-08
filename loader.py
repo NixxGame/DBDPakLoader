@@ -1380,7 +1380,6 @@ class DBDModLoader(_BaseClass):
 
         if _HAS_DND:
             self.drop_target_register(DND_FILES)
-            # FIX: bind drop event to the main area instead of root to avoid tkapp attribute error
             self.main_area.dnd_bind("<<Drop>>", self._on_drop)
             self._setup_drag_feedback()
 
@@ -1597,11 +1596,11 @@ class DBDModLoader(_BaseClass):
             self.empty_frame.place(relx=0.5, rely=0.5, anchor="center")
             self.detail_frame.place_forget()
             if self._bulk_frame:
-                self._bulk_frame.place_forget()
+                self._bulk_frame.pack_forget()
         elif cnt == 1:
             self.empty_frame.place_forget()
             if self._bulk_frame:
-                self._bulk_frame.place_forget()
+                self._bulk_frame.pack_forget()
             self.detail_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
             only_mod = next(iter(self.selected_mods))
             if self.current_mod != only_mod:
@@ -1611,41 +1610,178 @@ class DBDModLoader(_BaseClass):
             self.detail_frame.place_forget()
             if not self._bulk_frame:
                 self._build_bulk_frame()
-            self._bulk_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
-            self._update_bulk_labels()
+            else:
+                # Ensure it's visible and refresh content
+                self._bulk_frame.pack(fill="both", expand=True)
+                self._refresh_bulk_table()
+            self._bulk_frame.lift()
 
     def _build_bulk_frame(self):
+        """Build a full‑width table showing details of all selected mods."""
         self._bulk_frame = ctk.CTkFrame(self._content, fg_color=BG_ROOT)
-        center = ctk.CTkFrame(self._bulk_frame, fg_color=BG_PANEL, corner_radius=20)
-        center.place(relx=0.5, rely=0.5, anchor="center", width=500, height=300)
+        self._bulk_frame.pack(fill="both", expand=True)
 
-        ctk.CTkLabel(center, text="Multiple Mods Selected", font=_FT,
-                     text_color=ACCENT).pack(pady=(30, 10))
+        # ----- Top bar with title and action buttons -----
+        top_bar = ctk.CTkFrame(self._bulk_frame, fg_color=BG_PANEL, height=52, corner_radius=0)
+        top_bar.pack(fill="x")
+        top_bar.pack_propagate(False)
 
-        self._bulk_count_lbl = ctk.CTkLabel(center, text="", font=_FBM,
-                                            text_color=TEXT_SEC)
-        self._bulk_count_lbl.pack(pady=(0, 20))
+        self.bulk_title = ctk.CTkLabel(
+            top_bar, text="Selected Mods", font=ctk.CTkFont(family="Segoe UI Black", size=16, weight="bold"),
+            text_color=ACCENT
+        )
+        self.bulk_title.pack(side="left", padx=16, pady=10)
 
-        btn_frame = ctk.CTkFrame(center, fg_color="transparent")
-        btn_frame.pack(pady=10)
-        ctk.CTkButton(btn_frame, text="Install all", width=140, height=40,
-                      fg_color=ACCENT, hover_color=ACCENT_DIM,
-                      command=self._bulk_install).pack(side="left", padx=8)
-        ctk.CTkButton(btn_frame, text="Remove all", width=140, height=40,
-                      fg_color="#2e1010", hover_color="#4a1515",
-                      border_width=1, border_color=RED, text_color=RED,
-                      command=self._bulk_uninstall).pack(side="left", padx=8)
-        ctk.CTkButton(btn_frame, text="Delete all", width=140, height=40,
-                      fg_color=BG_CARD, hover_color=BG_CARD_HOV,
-                      text_color=RED, command=self._bulk_delete).pack(side="left", padx=8)
+        # Action buttons
+        btn_frame = ctk.CTkFrame(top_bar, fg_color="transparent")
+        btn_frame.pack(side="right", padx=12, pady=6)
 
-        ctk.CTkButton(center, text="Clear selection", width=200, height=35,
-                      fg_color=BG_FIELD, hover_color=BG_CARD,
-                      command=self._clear_selection).pack(pady=(20, 10))
+        ctk.CTkButton(
+            btn_frame, text="Install all", width=100, height=34,
+            fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black",
+            command=self._bulk_install
+        ).pack(side="left", padx=4)
 
-    def _update_bulk_labels(self):
-        if self._bulk_frame:
-            self._bulk_count_lbl.configure(text=f"{len(self.selected_mods)} mods selected")
+        ctk.CTkButton(
+            btn_frame, text="Remove all", width=100, height=34,
+            fg_color="#2e1010", hover_color="#4a1515", border_width=1, border_color=RED, text_color=RED,
+            command=self._bulk_uninstall
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            btn_frame, text="Delete all", width=100, height=34,
+            fg_color=BG_CARD, hover_color=BG_CARD_HOV, text_color=RED,
+            command=self._bulk_delete
+        ).pack(side="left", padx=4)
+
+        ctk.CTkButton(
+            btn_frame, text="Clear selection", width=110, height=34,
+            fg_color=BG_FIELD, hover_color=BG_CARD, text_color=TEXT_PRI,
+            command=self._clear_selection
+        ).pack(side="left", padx=4)
+
+        # ----- Table header -----
+        header = ctk.CTkFrame(self._bulk_frame, fg_color=BG_PANEL, height=32, corner_radius=0)
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        col_status = 40
+        col_name   = 220
+        col_files  = 80
+        col_size   = 100
+        pad_left = 16
+
+        ctk.CTkLabel(header, text="", width=col_status).pack(side="left", padx=(pad_left, 0))
+        ctk.CTkLabel(header, text="MOD NAME", font=_FSM, text_color=TEXT_MUT, width=col_name, anchor="w").pack(side="left")
+        ctk.CTkLabel(header, text="FILES", font=_FSM, text_color=TEXT_MUT, width=col_files, anchor="w").pack(side="left")
+        ctk.CTkLabel(header, text="SIZE", font=_FSM, text_color=TEXT_MUT, width=col_size, anchor="w").pack(side="left")
+        ctk.CTkLabel(header, text="", width=50).pack(side="left", fill="x", expand=True)
+
+        # ----- Scrollable table body -----
+        self.bulk_table = ctk.CTkScrollableFrame(
+            self._bulk_frame, fg_color="transparent",
+            scrollbar_button_color=TEXT_MUT, scrollbar_button_hover_color=TEXT_SEC
+        )
+        self.bulk_table.pack(fill="both", expand=True, padx=8, pady=8)
+
+        self._refresh_bulk_table()
+
+    def _refresh_bulk_table(self):
+        """Clear and rebuild the table rows for the currently selected mods."""
+        if not hasattr(self, "bulk_table"):
+            return
+        # Destroy all existing rows
+        for child in self.bulk_table.winfo_children():
+            child.destroy()
+
+        if not self.selected_mods:
+            return
+
+        # Update title with count
+        self.bulk_title.configure(text=f"Selected Mods ({len(self.selected_mods)})")
+
+        # Get current Paks path and suffix once for all checks
+        paks_path = self.get_active_paks_path()
+        suffix = self.get_active_suffix()
+
+        # For each selected mod, create a row
+        for idx, mod_name in enumerate(self.selected_mods):
+            mod_folder = os.path.join(self.mods_dir, mod_name)
+            if not os.path.isdir(mod_folder):
+                continue
+
+            # Compute stats
+            file_count, total_size = self._get_mod_stats(mod_name)
+
+            # Check installed status
+            installed = self._is_mod_installed_current(mod_name, paks_path, suffix)
+
+            # Row background (alternating)
+            bg = BG_CARD if idx % 2 == 0 else BG_FIELD
+
+            row = ctk.CTkFrame(self.bulk_table, fg_color=bg, corner_radius=6, height=36)
+            row.pack(fill="x", pady=1)
+            row.pack_propagate(False)
+
+            # Status column (green dot if installed)
+            dot_color = GREEN if installed else TEXT_MUT
+            status_lbl = ctk.CTkLabel(row, text="●", font=_FD, text_color=dot_color, width=40)
+            status_lbl.pack(side="left", padx=(16, 0))
+
+            # Mod name
+            name_lbl = ctk.CTkLabel(row, text=mod_name, font=_FBM, text_color=TEXT_PRI, width=220, anchor="w")
+            name_lbl.pack(side="left")
+
+            # File count
+            files_lbl = ctk.CTkLabel(row, text=str(file_count), font=_FBM, text_color=TEXT_PRI, width=80, anchor="w")
+            files_lbl.pack(side="left")
+
+            # Total size
+            size_lbl = ctk.CTkLabel(row, text=_format_bytes(total_size), font=_FBM, text_color=TEXT_PRI, width=100, anchor="w")
+            size_lbl.pack(side="left")
+
+            # Optional extra column (reserved)
+            ctk.CTkLabel(row, text="", width=50).pack(side="left", fill="x", expand=True)
+
+    def _get_mod_stats(self, mod_name):
+        """Return (file_count, total_size_bytes) for a mod folder."""
+        mod_path = os.path.join(self.mods_dir, mod_name)
+        if not os.path.isdir(mod_path):
+            return 0, 0
+        file_count = 0
+        total_size = 0
+        for f in os.listdir(mod_path):
+            fp = os.path.join(mod_path, f)
+            if os.path.isfile(fp):
+                file_count += 1
+                try:
+                    total_size += os.path.getsize(fp)
+                except OSError:
+                    pass
+        return file_count, total_size
+
+    def _is_mod_installed_current(self, mod_name, paks_path, suffix):
+        """Check if a mod's files are present in the given Paks folder with the given suffix."""
+        if not paks_path or not paks_path.exists():
+            return False
+        mod_path = os.path.join(self.mods_dir, mod_name)
+        if not os.path.isdir(mod_path):
+            return False
+        try:
+            paks_files = {f.lower() for f in os.listdir(paks_path)}
+        except OSError:
+            return False
+        for f in os.listdir(mod_path):
+            fp = os.path.join(mod_path, f)
+            if os.path.isfile(fp):
+                base, ext = os.path.splitext(f)
+                if "-" in base and suffix:
+                    new_name = "-".join(base.split("-")[:-1]) + suffix + ext
+                else:
+                    new_name = base + suffix + ext
+                if new_name.lower() in paks_files:
+                    return True
+        return False
 
     # ── Bulk actions ──────────────────────────────────────────────────────────
     def _bulk_install(self):
@@ -1908,7 +2044,7 @@ class DBDModLoader(_BaseClass):
         self.current_mod_path = os.path.join(self.mods_dir, folder_name)
         self.empty_frame.place_forget()
         if self._bulk_frame:
-            self._bulk_frame.place_forget()
+            self._bulk_frame.pack_forget()
         self.detail_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.mod_title.configure(text=folder_name)
         inst = self.is_mod_installed()
@@ -2004,7 +2140,7 @@ class DBDModLoader(_BaseClass):
         self.empty_frame.place_forget()
         self.detail_frame.place_forget()
         if self._bulk_frame:
-            self._bulk_frame.place_forget()
+            self._bulk_frame.pack_forget()
         self._browser_panel = ModBrowserPanel(
             self._content,
             mods_dir=self.mods_dir,
@@ -2107,7 +2243,7 @@ class DBDModLoader(_BaseClass):
         if hasattr(self, "_browser_panel") and self._browser_panel.winfo_exists():
             self._browser_panel.place_forget()
         if self._bulk_frame:
-            self._bulk_frame.place_forget()
+            self._bulk_frame.pack_forget()
         self._path_panel = PathEditorPanel(
             self._content,
             custom_paths=self.custom_paths,
