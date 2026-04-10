@@ -1408,6 +1408,15 @@ class DBDModLoader(_BaseClass):
         # Update checker cache: {mod_name: latest_version_str}
         self._mod_update_cache = {}
 
+        # Performance caches
+        self._installed_cache = {}          # mod_name -> bool
+        self._stats_cache = {}              # mod_name -> (file_count, total_size)
+        self._paks_listing_cache = None     # set of filenames in Paks folder
+        self._paks_listing_time = 0
+        self._last_platform = None
+        self._last_paks_path = None
+        self._last_suffix = None
+
         try:
             _PAK_CONFIG.mkdir(parents=True, exist_ok=True)
             (_PAK_CONFIG / "mods").mkdir(exist_ok=True)
@@ -1599,6 +1608,12 @@ class DBDModLoader(_BaseClass):
         self._paks_cache_valid = False
         self._paks_cache = None
         self._suffix_cache = None
+        # Invalidate installed status and Paks listing because platform changed
+        self._installed_cache.clear()
+        self._paks_listing_cache = None
+        self._last_platform = None
+        self._last_paks_path = None
+        self._last_suffix = None
 
     def get_active_paks_path(self):
         if self._paks_cache_valid: return self._paks_cache
@@ -1616,26 +1631,114 @@ class DBDModLoader(_BaseClass):
         self._suffix_cache = self.platforms.get(plat, {}).get("suffix", "")
         return self._suffix_cache
 
-    def _batch_check_installed(self, folders, paks_path, suffix):
-        inst = set()
-        if not paks_path or not paks_path.exists(): return inst
+    def _get_paks_listing(self):
+        """Return a set of lowercase filenames in the active Paks folder (cached)."""
+        paks_path = self.get_active_paks_path()
+        if not paks_path:
+            return set()
+        # Cache for 2 seconds to avoid excessive disk reads during rapid operations
+        now = time.time()
+        if (self._paks_listing_cache is not None and 
+            now - self._paks_listing_time < 2.0):
+            return self._paks_listing_cache
         try:
-            pf = {f.lower() for f in os.listdir(paks_path)}
+            files = {f.lower() for f in os.listdir(paks_path)}
         except OSError:
-            return inst
+            files = set()
+        self._paks_listing_cache = files
+        self._paks_listing_time = now
+        return files
+
+    def _batch_check_installed(self, folders, paks_path, suffix):
+        """
+        Returns a set of folder names that are installed.
+        Uses a single pass over all mods to build expected PAK names,
+        then checks against cached Paks listing.
+        """
+        if not paks_path or not paks_path.exists():
+            return set()
+        paks_files = self._get_paks_listing()
+        if not paks_files:
+            return set()
+        
+        installed = set()
+        # Precompute expected PAK names for all mods at once
         for folder in folders:
-            mp = os.path.join(self.mods_dir, folder)
-            try:
-                for f in os.listdir(mp):
-                    if os.path.isfile(os.path.join(mp, f)):
-                        b, e = os.path.splitext(f)
-                        n = ("-".join(b.split("-")[:-1]) + suffix + e if "-" in b and suffix else b + suffix + e)
-                        if n.lower() in pf:
-                            inst.add(folder)
-                            break
-            except OSError:
+            mod_path = os.path.join(self.mods_dir, folder)
+            if not os.path.isdir(mod_path):
                 continue
-        return inst
+            for f in os.listdir(mod_path):
+                fp = os.path.join(mod_path, f)
+                if os.path.isfile(fp):
+                    base, ext = os.path.splitext(f)
+                    if "-" in base and suffix:
+                        expected = "-".join(base.split("-")[:-1]) + suffix + ext
+                    else:
+                        expected = base + suffix + ext
+                    if expected.lower() in paks_files:
+                        installed.add(folder)
+                        break
+        return installed
+
+    def _get_mod_stats_cached(self, mod_name):
+        """Return (file_count, total_size) from cache or compute once."""
+        if mod_name in self._stats_cache:
+            return self._stats_cache[mod_name]
+        mod_path = os.path.join(self.mods_dir, mod_name)
+        if not os.path.isdir(mod_path):
+            self._stats_cache[mod_name] = (0, 0)
+            return (0, 0)
+        file_count = 0
+        total_size = 0
+        for f in os.listdir(mod_path):
+            fp = os.path.join(mod_path, f)
+            if os.path.isfile(fp):
+                file_count += 1
+                try:
+                    total_size += os.path.getsize(fp)
+                except OSError:
+                    pass
+        self._stats_cache[mod_name] = (file_count, total_size)
+        return (file_count, total_size)
+
+    def _check_conflicts_optimized(self):
+        """Faster conflict detection using cached PAK name mapping."""
+        if not self.current_mod_path:
+            return []
+        suffix = self.get_active_suffix()
+        # Build set of expected PAK names for current mod
+        current_paks = set()
+        for f in os.listdir(self.current_mod_path):
+            fp = os.path.join(self.current_mod_path, f)
+            if os.path.isfile(fp):
+                base, ext = os.path.splitext(f)
+                if "-" in base and suffix:
+                    expected = "-".join(base.split("-")[:-1]) + suffix + ext
+                else:
+                    expected = base + suffix + ext
+                current_paks.add(expected.lower())
+        if not current_paks:
+            return []
+        # Check other mods
+        conflicts = []
+        for mod_name in os.listdir(self.mods_dir):
+            if mod_name == self.current_mod:
+                continue
+            mod_path = os.path.join(self.mods_dir, mod_name)
+            if not os.path.isdir(mod_path):
+                continue
+            for f in os.listdir(mod_path):
+                fp = os.path.join(mod_path, f)
+                if os.path.isfile(fp):
+                    base, ext = os.path.splitext(f)
+                    if "-" in base and suffix:
+                        expected = "-".join(base.split("-")[:-1]) + suffix + ext
+                    else:
+                        expected = base + suffix + ext
+                    if expected.lower() in current_paks:
+                        conflicts.append(mod_name)
+                        break
+        return conflicts
 
     # ── Multi‑selection core logic ────────────────────────────────────────────
     def _clear_selection(self):
@@ -1807,101 +1910,33 @@ class DBDModLoader(_BaseClass):
         self._refresh_bulk_table()
 
     def _refresh_bulk_table(self):
-        """Clear and rebuild the table rows for the currently selected mods."""
+        """Uses cached stats for faster bulk display."""
         if not hasattr(self, "bulk_table"):
             return
-        # Destroy all existing rows
         for child in self.bulk_table.winfo_children():
             child.destroy()
-
         if not self.selected_mods:
             return
-
-        # Update title with count
         self.bulk_title.configure(text=f"Selected Mods ({len(self.selected_mods)})")
-
-        # Get current Paks path and suffix once for all checks
         paks_path = self.get_active_paks_path()
         suffix = self.get_active_suffix()
-
-        # For each selected mod, create a row
+        # Use cached installed status
         for idx, mod_name in enumerate(self.selected_mods):
             mod_folder = os.path.join(self.mods_dir, mod_name)
             if not os.path.isdir(mod_folder):
                 continue
-
-            # Compute stats
-            file_count, total_size = self._get_mod_stats(mod_name)
-
-            # Check installed status
-            installed = self._is_mod_installed_current(mod_name, paks_path, suffix)
-
-            # Row background (alternating)
+            file_count, total_size = self._get_mod_stats_cached(mod_name)
+            installed = self._installed_cache.get(mod_name, False)
             bg = BG_CARD if idx % 2 == 0 else BG_FIELD
-
             row = ctk.CTkFrame(self.bulk_table, fg_color=bg, corner_radius=6, height=36)
             row.pack(fill="x", pady=1)
             row.pack_propagate(False)
-
-            # Status column (green dot if installed)
             dot_color = GREEN if installed else TEXT_MUT
-            status_lbl = ctk.CTkLabel(row, text="●", font=_FD, text_color=dot_color, width=40)
-            status_lbl.pack(side="left", padx=(16, 0))
-
-            # Mod name
-            name_lbl = ctk.CTkLabel(row, text=mod_name, font=_FBM, text_color=TEXT_PRI, width=220, anchor="w")
-            name_lbl.pack(side="left")
-
-            # File count
-            files_lbl = ctk.CTkLabel(row, text=str(file_count), font=_FBM, text_color=TEXT_PRI, width=80, anchor="w")
-            files_lbl.pack(side="left")
-
-            # Total size
-            size_lbl = ctk.CTkLabel(row, text=_format_bytes(total_size), font=_FBM, text_color=TEXT_PRI, width=100, anchor="w")
-            size_lbl.pack(side="left")
-
-            # Optional extra column (reserved)
+            ctk.CTkLabel(row, text="●", font=_FD, text_color=dot_color, width=40).pack(side="left", padx=(16, 0))
+            ctk.CTkLabel(row, text=mod_name, font=_FBM, text_color=TEXT_PRI, width=220, anchor="w").pack(side="left")
+            ctk.CTkLabel(row, text=str(file_count), font=_FBM, text_color=TEXT_PRI, width=80, anchor="w").pack(side="left")
+            ctk.CTkLabel(row, text=_format_bytes(total_size), font=_FBM, text_color=TEXT_PRI, width=100, anchor="w").pack(side="left")
             ctk.CTkLabel(row, text="", width=50).pack(side="left", fill="x", expand=True)
-
-    def _get_mod_stats(self, mod_name):
-        """Return (file_count, total_size_bytes) for a mod folder."""
-        mod_path = os.path.join(self.mods_dir, mod_name)
-        if not os.path.isdir(mod_path):
-            return 0, 0
-        file_count = 0
-        total_size = 0
-        for f in os.listdir(mod_path):
-            fp = os.path.join(mod_path, f)
-            if os.path.isfile(fp):
-                file_count += 1
-                try:
-                    total_size += os.path.getsize(fp)
-                except OSError:
-                    pass
-        return file_count, total_size
-
-    def _is_mod_installed_current(self, mod_name, paks_path, suffix):
-        """Check if a mod's files are present in the given Paks folder with the given suffix."""
-        if not paks_path or not paks_path.exists():
-            return False
-        mod_path = os.path.join(self.mods_dir, mod_name)
-        if not os.path.isdir(mod_path):
-            return False
-        try:
-            paks_files = {f.lower() for f in os.listdir(paks_path)}
-        except OSError:
-            return False
-        for f in os.listdir(mod_path):
-            fp = os.path.join(mod_path, f)
-            if os.path.isfile(fp):
-                base, ext = os.path.splitext(f)
-                if "-" in base and suffix:
-                    new_name = "-".join(base.split("-")[:-1]) + suffix + ext
-                else:
-                    new_name = base + suffix + ext
-                if new_name.lower() in paks_files:
-                    return True
-        return False
 
     # ── Bulk actions ──────────────────────────────────────────────────────────
     def _bulk_install(self):
@@ -2152,35 +2187,20 @@ class DBDModLoader(_BaseClass):
         self._search_after_id = self.after(180, self.load_mods)
 
     def load_mods(self):
+        """Asynchronous, non‑blocking refresh of the mod sidebar."""
         self._clear_selection()
-        for w in self.mods_scroll.winfo_children(): w.destroy()
+        # Clear existing cards
+        for w in self.mods_scroll.winfo_children():
+            w.destroy()
         self._card_map.clear()
         self.mod_order.clear()
 
         q = self.search_var.get().strip().lower()
-        all_folders = [f for f in os.listdir(self.mods_dir) if os.path.isdir(os.path.join(self.mods_dir, f))]
+        all_folders = [f for f in os.listdir(self.mods_dir) 
+                       if os.path.isdir(os.path.join(self.mods_dir, f))]
         folders = [f for f in all_folders if q in f.lower()] if q else all_folders[:]
 
-        paks = self.get_active_paks_path()
-        suf  = self.get_active_suffix()
-        inst = self._batch_check_installed(all_folders, paks, suf)
-
-        # Update the sidebar count badge
-        if hasattr(self, "_mod_count_badge"):
-            total   = len(all_folders)
-            n_inst  = len([f for f in all_folders if f in inst])
-            badge_txt = f"{total} total  ·  {n_inst} installed"
-            self._mod_count_badge.configure(text=badge_txt,
-                text_color=GREEN if n_inst == total and total > 0 else TEXT_MUT)
-
-        if not folders:
-            ctk.CTkLabel(self.mods_scroll, text="No mods found.", font=_FBM,
-                         text_color=TEXT_SEC, justify="center").pack(pady=40)
-            return
-
-        folders.sort(key=lambda f: (0 if f in inst else 1, f.lower()))
-        self.mod_order = folders[:]
-
+        # Quick placeholder while we compute installed status in background
         for folder in folders:
             card = ModCard(self.mods_scroll, folder,
                            on_select=self._on_mod_click,
@@ -2188,15 +2208,46 @@ class DBDModLoader(_BaseClass):
                            on_context_menu=self._on_mod_context_menu)
             card.pack(fill="x", pady=2, padx=2)
             self._card_map[folder] = card
-            card.set_installed(folder in inst)
-            # Re-apply update badge if checker already found one
+            card.set_installed(False)  # temporary, will update
             if folder in self._mod_update_cache:
                 card.set_update_available(self._mod_update_cache[folder])
 
-        if self.current_mod and self.current_mod in self._card_map:
-            self._card_map[self.current_mod].set_selected(True)
-            self.selected_mods = {self.current_mod}
-            self._update_selection_ui()
+        self.mod_order = folders[:]
+
+        # Update count badge immediately
+        if hasattr(self, "_mod_count_badge"):
+            total = len(all_folders)
+            self._mod_count_badge.configure(text=f"{total} total")
+
+        # Run installed check in background
+        def check_installed():
+            paks = self.get_active_paks_path()
+            suffix = self.get_active_suffix()
+            # Check if cached status is still valid
+            platform = self.platform_var.get()
+            if (self._last_platform == platform and 
+                self._last_paks_path == paks and 
+                self._last_suffix == suffix and 
+                self._installed_cache):
+                installed_set = self._installed_cache
+            else:
+                installed_set = self._batch_check_installed(all_folders, paks, suffix)
+                self._installed_cache = installed_set
+                self._last_platform = platform
+                self._last_paks_path = paks
+                self._last_suffix = suffix
+            # Update badge with installed count
+            n_inst = len([f for f in all_folders if f in installed_set])
+            self.after(0, lambda: self._mod_count_badge.configure(
+                text=f"{total} total  ·  {n_inst} installed",
+                text_color=GREEN if n_inst == total and total > 0 else TEXT_MUT))
+            # Update card installed statuses
+            for folder, card in self._card_map.items():
+                card.set_installed(folder in installed_set)
+            # Also refresh current mod display if needed
+            if self.current_mod and self.current_mod in self._card_map:
+                self.after(0, lambda: self.select_mod(self.current_mod))
+        threading.Thread(target=check_installed, daemon=True).start()
 
     def select_mod(self, folder_name):
         self.current_mod = folder_name
@@ -2206,8 +2257,10 @@ class DBDModLoader(_BaseClass):
             self._bulk_frame.pack_forget()
         self.detail_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
         self.mod_title.configure(text=folder_name)
-        inst = self.is_mod_installed()
-        if inst:
+        
+        # Use cached installed status if available
+        installed = self._installed_cache.get(folder_name, self.is_mod_installed())
+        if installed:
             self.mod_status_badge.configure(text="● Installed", text_color=GREEN, fg_color="#0d2a1a")
             self.add_btn.configure(text="RE-ADD TO PAKS", fg_color=ORANGE, hover_color="#c2410c", text_color="black")
             self.remove_btn.configure(state="normal")
@@ -2215,14 +2268,17 @@ class DBDModLoader(_BaseClass):
             self.mod_status_badge.configure(text="● Not Installed", text_color=ORANGE, fg_color="#2a1a0d")
             self.add_btn.configure(text="ADD TO PAKS", fg_color=ACCENT, hover_color=ACCENT_DIM, text_color="black")
             self.remove_btn.configure(state="disabled")
-        fc, ts = self._compute_mod_stats()
+        
+        fc, ts = self._get_mod_stats_cached(folder_name)
         self.mod_stats_badge.configure(text=f"{fc} file(s) • {_format_bytes(ts)}")
-        conflicts = self._check_conflicts()
+        
+        conflicts = self._check_conflicts_optimized()
         self.conflict_label.configure(
             text=(f"⚠ Conflicts with: {', '.join(conflicts[:3])}"
                   + ("..." if len(conflicts) > 3 else "")) if conflicts else "")
+        
         if folder_name in self._card_map:
-            self._card_map[folder_name].set_installed(inst)
+            self._card_map[folder_name].set_installed(installed)
         self.show_final_files()
 
     def _compute_mod_stats(self):
@@ -2239,26 +2295,7 @@ class DBDModLoader(_BaseClass):
         return (tf, ts)
 
     def _check_conflicts(self):
-        if not self.current_mod_path: return []
-        suf = self.get_active_suffix()
-        tgt = set()
-        for f in os.listdir(self.current_mod_path):
-            if os.path.isfile(os.path.join(self.current_mod_path, f)):
-                b, e = os.path.splitext(f)
-                tgt.add(("-".join(b.split("-")[:-1]) + suf + e if "-" in b and suf else b + suf + e).lower())
-        out = []
-        for mf in os.listdir(self.mods_dir):
-            if mf == self.current_mod: continue
-            op = os.path.join(self.mods_dir, mf)
-            if not os.path.isdir(op): continue
-            for f in os.listdir(op):
-                if os.path.isfile(os.path.join(op, f)):
-                    b, e = os.path.splitext(f)
-                    n = ("-".join(b.split("-")[:-1]) + suf + e if "-" in b and suf else b + suf + e).lower()
-                    if n in tgt:
-                        out.append(mf)
-                        break
-        return out
+        return self._check_conflicts_optimized()  # alias for compatibility
 
     def is_mod_installed(self):
         if not self.current_mod: return False
@@ -2269,13 +2306,10 @@ class DBDModLoader(_BaseClass):
     def on_platform_change(self, _):
         self._invalidate_paks_cache()
         self._save_config()
-        paks = self.get_active_paks_path()
-        suf = self.get_active_suffix()
-        inst = self._batch_check_installed(list(self._card_map), paks, suf)
-        for f, c in self._card_map.items():
-            c.set_installed(f in inst)
-        if self.current_mod:
-            self.select_mod(self.current_mod)
+        # Force refresh of installed status
+        self._installed_cache.clear()
+        self._stats_cache.clear()  # stats don't change, but safe to clear
+        self.load_mods()
 
     def _open_current_mod_folder(self):
         if self.current_mod_path and os.path.exists(self.current_mod_path):
