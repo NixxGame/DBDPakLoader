@@ -370,6 +370,63 @@ class ModCard(ctk.CTkFrame):
 
     def set_installed(self,v): self._dot.configure(text_color=GREEN if v else TEXT_MUT)
 
+    def set_update_available(self, version_str):
+        """Show an orange update badge on the card."""
+        if not hasattr(self, "_upd_badge"):
+            self._upd_badge = ctk.CTkLabel(self, text="", font=_FSM,
+                                            fg_color=ORANGE, text_color="black",
+                                            corner_radius=5, padx=4, pady=1)
+        self._upd_badge.configure(text=f"↑{version_str}")
+        self._upd_badge.pack(side="right", padx=(0,4), before=self._dot)
+
+    def clear_update_badge(self):
+        if hasattr(self, "_upd_badge"):
+            try: self._upd_badge.pack_forget()
+            except Exception: pass
+
+# ── Toast ────────────────────────────────────────────────────────────────────
+class Toast:
+    """
+    Non-blocking notification that slides in from the bottom-right of a parent
+    frame and auto-dismisses after a timeout.
+    mode: "success" | "error" | "warn" | "info"
+    """
+    _COLS = {
+        "success": (GREEN,    "#0d2a1a"),
+        "error":   (RED,      "#2a0d0d"),
+        "warn":    (ORANGE,   "#2a1a0d"),
+        "info":    (ACCENT,   "#1a0d2a"),
+    }
+    _ICONS = {"success":"✅","error":"❌","warn":"⚠️","info":"ℹ️"}
+
+    def __init__(self, master, message, mode="success", duration=3000):
+        fg, bg = self._COLS.get(mode, self._COLS["info"])
+        icon   = self._ICONS.get(mode, "")
+        self._master  = master
+        self._duration = duration
+
+        self._frame = ctk.CTkFrame(master, fg_color=bg, corner_radius=10,
+                                    border_width=1, border_color=fg)
+        # Layout
+        inner = ctk.CTkFrame(self._frame, fg_color="transparent")
+        inner.pack(padx=14, pady=10)
+        ctk.CTkLabel(inner, text=icon, font=ctk.CTkFont(size=14),
+                     text_color=fg).pack(side="left", padx=(0,8))
+        ctk.CTkLabel(inner, text=message, font=_FB,
+                     text_color=fg, wraplength=260, justify="left",
+                     anchor="w").pack(side="left")
+
+        # Place bottom-right with a small margin
+        master.update_idletasks()
+        self._frame.place(relx=1.0, rely=1.0, anchor="se", x=-16, y=-16)
+        self._frame.lift()
+
+        master.after(duration, self._dismiss)
+
+    def _dismiss(self):
+        try: self._frame.destroy()
+        except Exception: pass
+
 # ── PathEditorPanel (unchanged) ───────────────────────────────────────────────
 class PathEditorPanel(ctk.CTkFrame):
     _SUFFIXES = ["-Windows", "-EGS", "-WinGDK"]
@@ -1348,6 +1405,8 @@ class DBDModLoader(_BaseClass):
         self.last_selected_mod = None
         self.mod_order = []
         self._bulk_frame = None
+        # Update checker cache: {mod_name: latest_version_str}
+        self._mod_update_cache = {}
 
         try:
             _PAK_CONFIG.mkdir(parents=True, exist_ok=True)
@@ -1379,13 +1438,18 @@ class DBDModLoader(_BaseClass):
         self.load_mods()
 
         if _HAS_DND:
+            # Register both the window and the content frame as drop targets
             self.drop_target_register(DND_FILES)
+            self.main_area.drop_target_register(DND_FILES)
             self.main_area.dnd_bind("<<Drop>>", self._on_drop)
+            self.main_area.dnd_bind("<<DragEnter>>", self._on_drag_enter)
+            self.main_area.dnd_bind("<<DragLeave>>", self._on_drag_leave)
             self._setup_drag_feedback()
 
         self.after(50, self._attempt_auto_detect)
         threading.Thread(target=self._check_for_update, daemon=True).start()
         self.after(200, self._start_ping)
+        self.after(3000, lambda: threading.Thread(target=self._check_mod_updates, daemon=True).start())
 
     # ── Analytics ping ─────────────────────────────────────────────────────────
     def _ping_server(self):
@@ -1414,6 +1478,62 @@ class DBDModLoader(_BaseClass):
 
     def _start_ping(self):
         threading.Thread(target=self._ping_server, daemon=True).start()
+
+    def toast(self, message, mode="success", duration=3000):
+        """Show a non-blocking toast notification over _content."""
+        if hasattr(self, "_content") and self._content.winfo_exists():
+            Toast(self._content, message, mode=mode, duration=duration)
+
+    # ── Mod update checker ────────────────────────────────────────────────────
+    def _check_mod_updates(self):
+        """
+        Fetch the D1 catalog and compare each mod's content_id / version
+        against what's locally installed. Stores results in _mod_update_cache
+        and badges outdated cards.
+        """
+        try:
+            ctx  = ssl.create_default_context()
+            conn = http.client.HTTPSConnection(_WORKER_HOST, timeout=20, context=ctx)
+            conn.request("GET", f"/mods?hwid={_HWID}",
+                         headers={"User-Agent": "DBDPakLoader/1.0"})
+            resp = conn.getresponse()
+            if resp.status != 200:
+                return
+            data = json.loads(resp.read().decode())
+            conn.close()
+            catalog = data.get("mods", data) if isinstance(data, dict) else data
+
+            # Build a lookup: folder_name (matched by mod name) -> catalog entry
+            updates = {}
+            local_folders = set(os.listdir(self.mods_dir))
+            for mod in catalog:
+                name    = mod.get("name", "")
+                version = mod.get("version") or mod.get("game_version")
+                if name in local_folders and version:
+                    # Check if a local version marker exists
+                    ver_file = Path(self.mods_dir) / name / ".pak_version"
+                    if ver_file.exists():
+                        local_ver = ver_file.read_text().strip()
+                        if local_ver != str(version):
+                            updates[name] = str(version)
+                    # Also flag if catalog has a newer download_url hash we can't compare —
+                    # store for display even if we can't auto-compare
+            self._mod_update_cache = updates
+            if updates:
+                self.after(0, self._apply_update_badges)
+        except Exception:
+            pass
+
+    def _apply_update_badges(self):
+        """Mark sidebar cards that have updates available."""
+        for folder, new_ver in self._mod_update_cache.items():
+            if folder in self._card_map:
+                self._card_map[folder].set_update_available(new_ver)
+        if self._mod_update_cache:
+            n = len(self._mod_update_cache)
+            self.after(0, lambda: self.toast(
+                f"{n} mod{'s' if n!=1 else ''} have updates available",
+                mode="info", duration=5000))
 
     # ── Config / helpers ──────────────────────────────────────────────────────
     def _load_config(self):
@@ -1814,6 +1934,7 @@ class DBDModLoader(_BaseClass):
         self.status_var.set(f"Installed {success} mod(s)")
         self.load_mods()
         self._clear_selection()
+        self.toast(f"Installed {success} mod(s) to Paks", mode="success")
 
     def _bulk_uninstall(self):
         if not self.selected_mods:
@@ -1846,6 +1967,7 @@ class DBDModLoader(_BaseClass):
         self.status_var.set(f"Removed {removed} file(s)")
         self.load_mods()
         self._clear_selection()
+        self.toast(f"Removed {removed} file(s) from Paks", mode="success")
 
     def _bulk_delete(self):
         if not self.selected_mods:
@@ -1891,7 +2013,13 @@ class DBDModLoader(_BaseClass):
         ctk.CTkLabel(logo, text="PAK", font=_FL, text_color=ACCENT).pack(side="left")
         ctk.CTkLabel(logo, text=" Loader", font=_FLS, text_color=TEXT_PRI).pack(side="left", pady=(1,0))
         ctk.CTkFrame(sb, height=1, fg_color=TEXT_MUT).pack(fill="x", padx=16, pady=(12,0))
-        ctk.CTkLabel(sb, text="MODS", font=_FSM, text_color=TEXT_MUT).pack(anchor="w", padx=20, pady=(10,3))
+        _mods_hdr = ctk.CTkFrame(sb, fg_color="transparent")
+        _mods_hdr.pack(fill="x", padx=20, pady=(10,0))
+        ctk.CTkLabel(_mods_hdr, text="MODS", font=_FSM, text_color=TEXT_MUT).pack(side="left")
+        self._mod_count_badge = ctk.CTkLabel(_mods_hdr, text="", font=_FSM,
+                                              text_color=TEXT_MUT)
+        self._mod_count_badge.pack(side="right")
+        ctk.CTkFrame(sb, height=0, fg_color="transparent").pack(pady=(3,0))
         self.search_var = ctk.StringVar()
         se = ctk.CTkEntry(sb, textvariable=self.search_var, placeholder_text="Search mods...",
                           height=34, fg_color=BG_FIELD, text_color=TEXT_PRI,
@@ -1998,8 +2126,26 @@ class DBDModLoader(_BaseClass):
 
     def _setup_drag_feedback(self):
         self._orig_bg = self.main_area.cget("fg_color")
-        self.main_area.bind("<Enter>", lambda e: self.main_area.configure(fg_color="#1a1a2e"))
-        self.main_area.bind("<Leave>", lambda e: self.main_area.configure(fg_color=self._orig_bg))
+        # Visual feedback is driven by DnD events, not plain mouse enter/leave
+
+    def _on_drag_enter(self, event=None):
+        """Highlight the drop zone when a file is dragged over it."""
+        self.main_area.configure(fg_color="#1a1a2e")
+        self._drop_hint_lbl = ctk.CTkLabel(
+            self._content,
+            text="⬇  Drop to import",
+            font=ctk.CTkFont(family="Segoe UI Black", size=22, weight="bold"),
+            text_color=ACCENT, fg_color="#1a1a2e", corner_radius=12,
+            padx=30, pady=16)
+        self._drop_hint_lbl.place(relx=0.5, rely=0.5, anchor="center")
+        self._drop_hint_lbl.lift()
+
+    def _on_drag_leave(self, event=None):
+        """Remove highlight when drag leaves."""
+        self.main_area.configure(fg_color=self._orig_bg)
+        if hasattr(self, "_drop_hint_lbl"):
+            try: self._drop_hint_lbl.destroy()
+            except Exception: pass
 
     def _on_search_key(self, _=None):
         if self._search_after_id: self.after_cancel(self._search_after_id)
@@ -2012,16 +2158,26 @@ class DBDModLoader(_BaseClass):
         self.mod_order.clear()
 
         q = self.search_var.get().strip().lower()
-        folders = [f for f in os.listdir(self.mods_dir) if os.path.isdir(os.path.join(self.mods_dir, f))]
-        if q: folders = [f for f in folders if q in f.lower()]
+        all_folders = [f for f in os.listdir(self.mods_dir) if os.path.isdir(os.path.join(self.mods_dir, f))]
+        folders = [f for f in all_folders if q in f.lower()] if q else all_folders[:]
+
+        paks = self.get_active_paks_path()
+        suf  = self.get_active_suffix()
+        inst = self._batch_check_installed(all_folders, paks, suf)
+
+        # Update the sidebar count badge
+        if hasattr(self, "_mod_count_badge"):
+            total   = len(all_folders)
+            n_inst  = len([f for f in all_folders if f in inst])
+            badge_txt = f"{total} total  ·  {n_inst} installed"
+            self._mod_count_badge.configure(text=badge_txt,
+                text_color=GREEN if n_inst == total and total > 0 else TEXT_MUT)
+
         if not folders:
             ctk.CTkLabel(self.mods_scroll, text="No mods found.", font=_FBM,
                          text_color=TEXT_SEC, justify="center").pack(pady=40)
             return
 
-        paks = self.get_active_paks_path()
-        suf = self.get_active_suffix()
-        inst = self._batch_check_installed(folders, paks, suf)
         folders.sort(key=lambda f: (0 if f in inst else 1, f.lower()))
         self.mod_order = folders[:]
 
@@ -2033,6 +2189,9 @@ class DBDModLoader(_BaseClass):
             card.pack(fill="x", pady=2, padx=2)
             self._card_map[folder] = card
             card.set_installed(folder in inst)
+            # Re-apply update badge if checker already found one
+            if folder in self._mod_update_cache:
+                card.set_update_available(self._mod_update_cache[folder])
 
         if self.current_mod and self.current_mod in self._card_map:
             self._card_map[self.current_mod].set_selected(True)
@@ -2388,9 +2547,9 @@ class DBDModLoader(_BaseClass):
                     shutil.copy2(Path(self.current_mod_path) / f, paks / nn)
             self._invalidate_paks_cache()
             self.status_var.set(f"✅ {self.current_mod} added")
-            messagebox.showinfo("Success", f"'{self.current_mod}' added successfully.")
             self.load_mods()
             self.select_mod(self.current_mod)
+            self.toast(f"'{self.current_mod}' added to Paks", mode="success")
         except Exception as e:
             messagebox.showerror("Error", str(e))
         finally:
@@ -2420,9 +2579,9 @@ class DBDModLoader(_BaseClass):
                         removed += 1
             self._invalidate_paks_cache()
             self.status_var.set(f"✅ {self.current_mod} removed")
-            messagebox.showinfo("Removed", f"Removed {removed} file(s) for '{self.current_mod}'")
             self.load_mods()
             self.select_mod(self.current_mod)
+            self.toast(f"Removed {removed} file(s) for '{self.current_mod}'", mode="success")
         except Exception as e:
             messagebox.showerror("Error", str(e))
         finally:
@@ -2486,23 +2645,39 @@ class DBDModLoader(_BaseClass):
         self.destroy()
 
     def _on_drop(self, event):
+        # Restore visual state
         self.main_area.configure(fg_color=self._orig_bg)
+        if hasattr(self, "_drop_hint_lbl"):
+            try: self._drop_hint_lbl.destroy()
+            except Exception: pass
+
         raw = event.data.strip()
         import re
         paths = ([a or b for a, b in re.findall(r'\{([^}]+)\}|(\S+)', raw)]
                  if raw.startswith("{") else raw.split())
-        imported = 0
+        paths = [p.strip().strip("{}") for p in paths if p.strip().strip("{}")]
+        if not paths: return
+
+        imported = errors = 0
+        last_name = ""
         for p in paths:
-            p = p.strip().strip("{}")
-            if p:
-                try:
-                    self._do_import(p, silent=len(paths) > 1)
-                    imported += 1
-                except Exception as e:
-                    messagebox.showerror("Import Error", str(e))
-        if len(paths) > 1:
-            self.load_mods()
-            self.status_var.set(f"Imported {imported} of {len(paths)} items")
+            try:
+                self._do_import(p, silent=True)
+                imported += 1
+                last_name = Path(p).stem
+            except Exception as e:
+                errors += 1
+                self.toast(f"Import failed: {Path(p).name}\n{e}", mode="error", duration=5000)
+
+        self.load_mods()
+        if imported == 1:
+            self.status_var.set(f"✅ Imported: {last_name}")
+            self.toast(f"Imported '{last_name}'", mode="success")
+        elif imported > 1:
+            self.status_var.set(f"✅ Imported {imported} mods")
+            self.toast(f"Imported {imported} mod{'s' if imported!=1 else ''}"
+                       + (f"  ({errors} failed)" if errors else ""),
+                       mode="success" if not errors else "warn")
 
 if __name__ == "__main__":
     app = DBDModLoader()
